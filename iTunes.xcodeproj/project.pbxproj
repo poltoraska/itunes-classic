@@ -1,0 +1,306 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		74C2431FE30C4A47C8443B80 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = F8995BA5891B07E328C60D6B /* AppIcon.icns */; };
+		7A4CA36230AC64560037D808 /* Queue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CA36130AC64560037D808 /* Queue.swift */; };
+		7A7C04FB30A893A2002F95BD /* NativeTags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7C04FA30A893A2002F95BD /* NativeTags.swift */; };
+		A01100000000000000000011 /* LegacyIcons in Resources */ = {isa = PBXBuildFile; fileRef = A01100000000000000000001 /* LegacyIcons */; };
+		A01100000000000000000012 /* GenreArtwork in Resources */ = {isa = PBXBuildFile; fileRef = A01100000000000000000002 /* GenreArtwork */; };
+		A01400000000000000000002 /* TrafficLights in Resources */ = {isa = PBXBuildFile; fileRef = A01400000000000000000001 /* TrafficLights */; };
+		A01800000000000000000002 /* AlbumDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01800000000000000000001 /* AlbumDrawer.swift */; };
+		A0D000000000000000000001 /* Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7C04F830A88ED4002F95BD /* Metadata.swift */; };
+		A0D000000000000000000002 /* MetadataEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7C04F930A88F5F002F95BD /* MetadataEditor.swift */; };
+		A7C4CE9CBB25F269EE30D36B /* Library.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B3B763B3C962423290BA3BC /* Library.swift */; };
+		B47FDF587EADE4A203012CB3 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 909767498633C8004519C6F0 /* main.swift */; };
+		D07BBCB86FA8F7814C1E6A64 /* Style.swift in Sources */ = {isa = PBXBuildFile; fileRef = 652CC9EC11166FD3395AD2F7 /* Style.swift */; };
+		D14A9648A77991F3C5472DEB /* Interface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFBE44DD822101408E2939 /* Interface.swift */; };
+		A03400000000000000000011 /* AndroidSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03400000000000000000001; };
+		A03400000000000000000012 /* MTPBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A03400000000000000000002; };
+		A03400000000000000000013 /* Libraries.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A03400000000000000000003; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0112DAE3F84CB4DF5179BE01 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1ACFBE44DD822101408E2939 /* Interface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Interface.swift; sourceTree = "<group>"; };
+		3B3B763B3C962423290BA3BC /* Library.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Library.swift; sourceTree = "<group>"; };
+		652CC9EC11166FD3395AD2F7 /* Style.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Style.swift; sourceTree = "<group>"; };
+		7A4CA36130AC64560037D808 /* Queue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Queue.swift; sourceTree = "<group>"; };
+		7A7C04F830A88ED4002F95BD /* Metadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Metadata.swift; sourceTree = "<group>"; };
+		7A7C04F930A88F5F002F95BD /* MetadataEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataEditor.swift; sourceTree = "<group>"; };
+		7A7C04FA30A893A2002F95BD /* NativeTags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTags.swift; sourceTree = "<group>"; };
+		7D1043473D55BFA90E8530D3 /* iTunes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iTunes.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		909767498633C8004519C6F0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A01100000000000000000001 /* LegacyIcons */ = {isa = PBXFileReference; lastKnownFileType = folder; path = LegacyIcons; sourceTree = "<group>"; };
+		A01100000000000000000002 /* GenreArtwork */ = {isa = PBXFileReference; lastKnownFileType = folder; path = GenreArtwork; sourceTree = "<group>"; };
+		A01400000000000000000001 /* TrafficLights */ = {isa = PBXFileReference; lastKnownFileType = folder; path = TrafficLights; sourceTree = "<group>"; };
+		A01800000000000000000001 /* AlbumDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumDrawer.swift; sourceTree = "<group>"; };
+		F78A71AF8BBF8CC2F6F31354 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		F8995BA5891B07E328C60D6B /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		A03400000000000000000001 /* AndroidSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AndroidSync.swift"; sourceTree = "<group>"; };
+		A03400000000000000000002 /* MTPBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "Native/MTPBridge.m"; sourceTree = SOURCE_ROOT; };
+		A03400000000000000000003 /* Libraries.bundle */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Resources/Libraries.bundle"; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F01580CCB5F725E4E879D491 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0189424A5A60FED329FA868E /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F8995BA5891B07E328C60D6B /* AppIcon.icns */,
+				A01400000000000000000001 /* TrafficLights */,
+				A01100000000000000000002 /* GenreArtwork */,
+				A01100000000000000000001 /* LegacyIcons */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		482182478A3ECD4745BEA917 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				1ACFBE44DD822101408E2939 /* Interface.swift */,
+				A03400000000000000000003 /* Libraries.bundle */,
+				A03400000000000000000002 /* MTPBridge.m */,
+				A03400000000000000000001 /* AndroidSync.swift */,
+				A01800000000000000000001 /* AlbumDrawer.swift */,
+				3B3B763B3C962423290BA3BC /* Library.swift */,
+				652CC9EC11166FD3395AD2F7 /* Style.swift */,
+				7A7C04F830A88ED4002F95BD /* Metadata.swift */,
+				7A7C04F930A88F5F002F95BD /* MetadataEditor.swift */,
+				909767498633C8004519C6F0 /* main.swift */,
+				7A7C04FA30A893A2002F95BD /* NativeTags.swift */,
+				7A4CA36130AC64560037D808 /* Queue.swift */,
+			);
+			name = Sources;
+			path = Sources/iTunes;
+			sourceTree = "<group>";
+		};
+		DC76E9F0C0006E8F919E0C51 = {
+			isa = PBXGroup;
+			children = (
+				482182478A3ECD4745BEA917 /* Sources */,
+				0189424A5A60FED329FA868E /* Resources */,
+				0112DAE3F84CB4DF5179BE01 /* Info.plist */,
+				F78A71AF8BBF8CC2F6F31354 /* README.md */,
+				FBDC4F23F93125BBEEAE800C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FBDC4F23F93125BBEEAE800C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7D1043473D55BFA90E8530D3 /* iTunes.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0E8A3AD980EC179856012B7E /* iTunes */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C57128001CE614BF8549D6BB /* Build configuration list for PBXNativeTarget "iTunes" */;
+			buildPhases = (
+				72A8017E75795FC05F78F54C /* Sources */,
+				F01580CCB5F725E4E879D491 /* Frameworks */,
+				963488E8A773A44C9A5DC523 /* Resources */,
+				A07000000000000000000001 /* Stable local signing */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = iTunes;
+			productName = iTunes;
+			productReference = 7D1043473D55BFA90E8530D3 /* iTunes.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 862894B703A6DEDF96A9DD6C /* Build configuration list for PBXProject "iTunes" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				ru,
+			);
+			mainGroup = DC76E9F0C0006E8F919E0C51;
+			productRefGroup = FBDC4F23F93125BBEEAE800C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				0E8A3AD980EC179856012B7E /* iTunes */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		963488E8A773A44C9A5DC523 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				74C2431FE30C4A47C8443B80 /* AppIcon.icns in Resources */,
+				A01400000000000000000002 /* TrafficLights in Resources */,
+				A03400000000000000000013 /* Libraries.bundle in Resources */,
+				A01100000000000000000012 /* GenreArtwork in Resources */,
+				A01100000000000000000011 /* LegacyIcons in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A07000000000000000000001 /* Stable local signing */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stable local signing";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/zsh;
+			shellScript = "set -eu\n\"$PROJECT_DIR/signing.sh\"\nfor lib in \"$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/Libraries.bundle/\"*.dylib; do /usr/bin/codesign --force --keychain \"$PROJECT_DIR/.signing/iTunes.keychain-db\" --sign \"iTunes Local Development\" \"$lib\"; done\n/usr/bin/codesign --force --keychain \"$PROJECT_DIR/.signing/iTunes.keychain-db\" --sign \"iTunes Local Development\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		72A8017E75795FC05F78F54C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D14A9648A77991F3C5472DEB /* Interface.swift in Sources */,
+				A03400000000000000000012 /* MTPBridge.m in Sources */,
+				A03400000000000000000011 /* AndroidSync.swift in Sources */,
+				A01800000000000000000002 /* AlbumDrawer.swift in Sources */,
+				A7C4CE9CBB25F269EE30D36B /* Library.swift in Sources */,
+				D07BBCB86FA8F7814C1E6A64 /* Style.swift in Sources */,
+				7A7C04FB30A893A2002F95BD /* NativeTags.swift in Sources */,
+				A0D000000000000000000001 /* Metadata.swift in Sources */,
+				A0D000000000000000000002 /* MetadataEditor.swift in Sources */,
+				7A4CA36230AC64560037D808 /* Queue.swift in Sources */,
+				B47FDF587EADE4A203012CB3 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		639A7CA24D39909E713B47F7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.itunes.prototype;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		7082CC0B6FC1282FCEABD07A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.itunes.prototype;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		89E1FD6268CC0F221A2BE178 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+                CLANG_ENABLE_OBJC_ARC = YES;
+                SWIFT_OBJC_BRIDGING_HEADER = "Native/include/MTPBridge.h";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		E6DE6C99132752C914FEF632 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+                CLANG_ENABLE_OBJC_ARC = YES;
+                SWIFT_OBJC_BRIDGING_HEADER = "Native/include/MTPBridge.h";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		862894B703A6DEDF96A9DD6C /* Build configuration list for PBXProject "iTunes" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				89E1FD6268CC0F221A2BE178 /* Debug */,
+				E6DE6C99132752C914FEF632 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C57128001CE614BF8549D6BB /* Build configuration list for PBXNativeTarget "iTunes" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7082CC0B6FC1282FCEABD07A /* Debug */,
+				639A7CA24D39909E713B47F7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}

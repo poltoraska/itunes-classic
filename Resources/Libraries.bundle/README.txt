@@ -1,0 +1,1 @@
+Dynamically linked, replaceable LGPL libmtp 1.1.23 and libusb from PixelTransfer. License texts included. Source: https://github.com/libmtp/libmtp and https://github.com/libusb/libusb . No phone data is sent over the network.
