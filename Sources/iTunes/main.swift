@@ -324,16 +324,18 @@ enum WindowPlacement {
                 demo.lyrics = "[00:00.00]Первая строка следует за музыкой\n[00:05.00]Текущая строка выделяется синим\n[00:10.00]Остальной текст остаётся спокойным\n[00:15.00]Можно прокрутить и вернуться к песне"
                 library.tracks = [demo]; library.currentID = demo.id; self.view.refresh(); self.view.toggleLyrics()
             }
+            if args.contains("--audit-dialog") { AquaMessage.show(for:window,title:"Проверка медиатеки",message:"Отсутствующие файлы не найдены.\n\nВсе композиции доступны в папках медиатеки.") }
             if args.contains("--android-sync-panel") { self.syncAndroid() }
             if args.contains("--hover") { view.setTrafficHovered(true) }
             if args.contains("--mini") { self.toggleMini() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 self.view.layoutSubtreeIfNeeded()
-                let captured = self.androidSyncWindow?.window?.contentView ?? self.view!
+                let captured = AquaMessage.active?.window?.contentView ?? self.androidSyncWindow?.window?.contentView ?? self.view!
                 guard let i = args.firstIndex(of: "--snapshot"), args.indices.contains(i + 1), let bitmap = captured.bitmapImageRepForCachingDisplay(in: captured.bounds) else { NSApp.terminate(nil); return }
                 captured.cacheDisplay(in: captured.bounds, to: bitmap)
                 try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[i + 1]))
-                NSApp.terminate(nil)
+                if let dialog=AquaMessage.active { dialog.finish(false); DispatchQueue.main.async { NSApp.terminate(nil) } }
+                else { NSApp.terminate(nil) }
             }
         } else { NSApp.activate(ignoringOtherApps: true) }
     }
@@ -395,6 +397,7 @@ enum WindowPlacement {
         let file = NSMenuItem(); file.title = "Файл"; let fileMenu = NSMenu(title: "Файл"); file.submenu = fileMenu; menu.addItem(file)
         fileMenu.addItem(withTitle: "Добавить музыку и видеоклипы…", action: #selector(importFiles), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Добавить медиатеку…", action: #selector(importLibrary), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle:"Проверить файлы медиатеки…",action:#selector(auditMediaFiles),keyEquivalent:"").target=self
         fileMenu.addItem(withTitle: "Синхронизировать с Android…", action: #selector(syncAndroid), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Информация…", action: #selector(editInfo), keyEquivalent: "i").target = self
         fileMenu.addItem(withTitle: "Новый плейлист…", action: #selector(newPlaylist), keyEquivalent: "n").target = self
@@ -497,6 +500,7 @@ enum WindowPlacement {
         window.makeKeyAndOrderFront(nil); view.layoutSubtreeIfNeeded(); window.makeFirstResponder(view.search)
     }
     @objc func editInfo() { view.editSelection() }
+    @objc func auditMediaFiles() { view.auditMediaFiles() }
     @objc func importLibrary() { view.importLibrary() }
     @objc func importFiles() { view.importFiles() }
     @objc func newPlaylist() { view.createPlaylist() }
@@ -521,9 +525,11 @@ enum WindowPlacement {
             let file = root.appendingPathComponent("Test Tone.wav"); try Self.testAudio().write(to: file)
             let first = await library.importURLs([file]); precondition(first.0 == 1 && first.1 == 0)
             let second = await library.importURLs([file]); precondition(second.0 == 0)
+            try await testManagedMedia(root:root)
+            try testMediaRemoval(track: library.tracks[0], root: root)
             testRefinements(track: library.tracks[0], root: root)
             testPlaybackQueue(track: library.tracks[0], storage: root.appendingPathComponent("queue.json"))
-            MetadataEditor.testAquaEditor(track: library.tracks[0], storage: root.appendingPathComponent("aqua-editor.json"))
+            await MetadataEditor.testAquaEditor(track: library.tracks[0], storage: root.appendingPathComponent("aqua-editor.json"))
             try await testAndroidSync(track: library.tracks[0], root: root)
             testLocalLyrics(track: library.tracks[0], root: root)
             try await testAnimatedLyrics(track: library.tracks[0], root: root)
@@ -1006,4 +1012,88 @@ final class LyricsMockProtocol: URLProtocol, @unchecked Sendable {
     library.player?.currentTime = 0; pane.tick(); pane.tick(force: true)
     precondition(pane.rows[0].emphasis == 1 && pane.rows[1].emphasis == 0)
     print("PASS: timed synchronized lyric fade, asynchronous start, completion, manual follow and interrupted seek")
+}
+
+@MainActor func testMediaRemoval(track fixture: Track, root: URL) throws {
+    let aFile=root.appendingPathComponent("keep.wav"), bFile=root.appendingPathComponent("remove.wav")
+    try FileManager.default.copyItem(at:URL(fileURLWithPath:fixture.path!),to:aFile)
+    try FileManager.default.copyItem(at:URL(fileURLWithPath:fixture.path!),to:bFile)
+    var a=fixture; a.id="keep"; a.path=aFile.path; a.plays=7
+    var b=fixture; b.id="remove"; b.path=bFile.path
+    var c=fixture; c.id="missing"; c.path=root.appendingPathComponent("gone.wav").path
+    var offline=fixture; offline.id="offline"; offline.path="/Volumes/iTunes-unmounted-test-"+UUID().uuidString+"/song.mp3"
+    var virtual=fixture; virtual.id="virtual"; virtual.path=nil
+    let audit=MediaAudit.scan([a,b,c,offline,virtual])
+    precondition(audit.missing.map(\.id) == [c.id] && audit.unavailable == 1)
+    precondition(MediaAudit.state(root.path) == .unavailable)
+    let library=Library(storage:root.appendingPathComponent("removal.json")); library.tracks=[a,b,c,offline]
+    library.playlists=["Mix":[a.id,b.id,b.id,c.id,offline.id]]; library.queue=[a.id,b.id,c.id]
+    library.playbackPlan.start([a.id,b.id,c.id],at:a.id,title:"Test",shuffled:false)
+    library.playbackPlan.add([b.id,c.id],next:true); library.playbackPlan.add([b.id,offline.id],next:false)
+    library.play(a,within:[a,b,c]); let player=library.player
+    precondition(library.removeRecords([b.id]))
+    precondition(library.player === player && library.currentID == a.id && library.tracks.first!.plays >= 7)
+    precondition(!library.playbackPlan.cycle.contains(b.id) && !library.queue.contains(b.id))
+    for section in QueueSection.allCases { precondition(!library.playbackPlan.entries(section).contains { $0.trackID == b.id }) }
+    precondition(library.playlists["Mix"] == [a.id,c.id,offline.id] && FileManager.default.fileExists(atPath:bFile.path))
+    precondition(library.removeRecords([a.id,c.id]))
+    precondition(library.currentID == nil && library.player == nil && library.tracks.map(\.id) == [offline.id])
+    precondition(FileManager.default.fileExists(atPath:aFile.path))
+    let restored=Library(storage:library.storage); precondition(restored.tracks.map(\.id) == [offline.id] && restored.playlists["Mix"] == [offline.id])
+    let blocker=root.appendingPathComponent("not-a-directory"); try Data([1]).write(to:blocker)
+    let failed=Library(storage:blocker.appendingPathComponent("library.json")); failed.tracks=[a,b]; failed.playlists=["Keep":[a.id,b.id]]
+    precondition(!failed.removeRecords([b.id]) && failed.tracks.count == 2 && failed.playlists["Keep"]!.count == 2)
+    precondition(PlayerView.finderURLs([a,a,b]).count == 2)
+    let view=PlayerView(library:failed); precondition(view.albumMembers([a]).count == 2); view.timer?.invalidate()
+    let group=LibraryGroup(key:a.albumKey,title:a.album,subtitle:a.artist,tracks:[a,b])
+    let stage=AlbumStage(frame:NSRect(x:0,y:0,width:900,height:600)); stage.grid=true; stage.gridGroups=[group]
+    let actions=stage.albumActions(at:0); precondition(actions.last?.0 == "Удалить альбом…" && actions.map(\.0).contains("Показать в Finder"))
+    var removed: [String]=[]; stage.drawer.onRemove={ tracks,album in precondition(album); removed=tracks.map(\.id) }
+    actions.last!.1(); precondition(Set(removed) == [a.id,b.id])
+    let drawer=AlbumDrawer(frame:NSRect(x:0,y:0,width:900,height:400)); drawer.configure(group); drawer.select(a.id)
+    precondition(drawer.actionsForSelection().last?.0 == "Удалить из медиатеки…")
+    print("PASS: record-only deletion preserves original files, current/queued/playlists cleanup, persistence rollback, missing-vs-offline audit, unique Finder URLs and bottom-position album/track deletion actions")
+}
+
+@MainActor func testManagedMedia(root: URL) async throws {
+    guard let index=CommandLine.arguments.firstIndex(of:"--fixtures"), CommandLine.arguments.indices.contains(index+1) else { return }
+    let fixtures=URL(fileURLWithPath:CommandLine.arguments[index+1]).standardizedFileURL
+    let files=try FileManager.default.contentsOfDirectory(at:fixtures,includingPropertiesForKeys:nil).filter { ["mp3","aiff","m4a"].contains($0.pathExtension) }
+    let originals=try files.map { try Data(contentsOf:$0) }
+    let base=root.appendingPathComponent("managed-test"); try FileManager.default.createDirectory(at:base,withIntermediateDirectories:true)
+    let library=Library(storage:base.appendingPathComponent("library.json"),managedImports:true)
+    let imported=await library.importURLs(files); precondition(imported.0 == 3 && imported.1 == 0)
+    precondition(library.tracks.allSatisfy { $0.managedCopy == true && $0.path!.hasPrefix(library.mediaRoot.path+"/") && $0.importedAt != nil })
+    let repeated=await library.importURLs(files); precondition(repeated.0 == 0)
+    let ids=Set(library.tracks.map(\.id)), oldPaths=library.tracks.map { $0.path! }
+    var patch=MetadataPatch(); patch.fields=[.album:"Новый альбом",.albumArtist:"Певец",.artist:"Певец",.year:"2026",.genre:"Pop",.number:"3"]
+    try await library.applyAsync(patch,to:ids)
+    precondition(Set(library.tracks.map(\.id)) == ids)
+    precondition(library.tracks.allSatisfy { $0.path!.contains("/Певец/Новый альбом/") && $0.number == 3 })
+    precondition(oldPaths.allSatisfy { !FileManager.default.fileExists(atPath:$0) })
+    for (i,url) in files.enumerated() { let actual=try Data(contentsOf:url); precondition(actual == originals[i]) }
+    for track in library.tracks {
+        let actual=await ImportedMetadata.read(URL(fileURLWithPath:track.path!))!
+        precondition(actual.fields[.album] == "Новый альбом" && actual.fields[.artist] == "Певец" && actual.fields[.year] == "2026" && actual.fields[.number] == "3")
+    }
+    let reimport=Library(storage:root.appendingPathComponent("export-reimport.json"))
+    let result=await reimport.importURLs([library.mediaRoot]); precondition(result.0 == 3 && reimport.tracks.allSatisfy { $0.album == "Новый альбом" && $0.artist == "Певец" })
+    let before=try library.tracks.map { try Data(contentsOf:URL(fileURLWithPath:$0.path!)) }
+    let paths=library.tracks.map { $0.path! }
+    let manifest=try Data(contentsOf:library.storage)
+    try FileManager.default.removeItem(at:library.storage); try FileManager.default.createDirectory(at:library.storage,withIntermediateDirectories:false)
+    var year=MetadataPatch(); year.fields=[.year:"2025"]
+    do { try await library.applyAsync(year,to:ids); preconditionFailure("Must roll back file changes when DB save fails") } catch {}
+    precondition(library.tracks.map { $0.path! } == paths)
+    for (i,path) in paths.enumerated() { let actual=try Data(contentsOf:URL(fileURLWithPath:path)); precondition(actual == before[i]) }
+    try FileManager.default.removeItem(at:library.storage); try manifest.write(to:library.storage)
+    let another=base.appendingPathComponent("New download.mp3"); try FileManager.default.copyItem(at:files.first { $0.pathExtension == "mp3" }!,to:another)
+    let next=await library.importURLs([another]); precondition(next.0 == 1)
+    let newest=library.tracks.last!.id
+    let ui=PlayerView(library:library); ui.source="Недавно добавленные"; ui.setMode(0); ui.refresh()
+    precondition(ui.rows.first?.id == newest)
+    ui.timer?.invalidate()
+    let dialog=AquaMessage(title:"Проверка медиатеки",message:"Тест",cancel:true,completion:{ _ in })
+    precondition(dialog.window?.contentView is ClassicWindowChrome && dialog.okay.aqua)
+    print("PASS: managed drag-import copies, duplicate suppression, actual MP3/AIFF/M4A tags and organized paths, untouched originals, reimported metadata, exact file rollback on DB failure, newest-first list and pulsing Aqua dialog")
 }

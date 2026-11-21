@@ -66,6 +66,7 @@ final class EditorButton: NSButton {
     private var tab = 0
     private let cover = NSImageView()
     private var lyricsView: NSTextView?
+    private var saving=false
     private var resetPlays = false
     private var artworkScale = 1.0
     private let errorLabel = NSTextField(labelWithString: "")
@@ -217,17 +218,22 @@ final class EditorButton: NSButton {
     }
     func present(for parent: NSWindow) { guard let window else { return }; parent.beginSheet(window) }
     private func commit() {
+        guard !saving else { return }
         window?.makeFirstResponder(nil); captureDraft()
         var patch = MetadataPatch(); patch.artwork = artwork; patch.resetPlays = resetPlays
         for key in changed {
             let value = draft[key] ?? ""
             if mixed.contains(key) || value != original[key] { patch.fields[key] = value }
         }
-        do { try library.apply(patch, to: Set(records.map(\.id))); onSaved?(); closeSheet() }
-        catch { errorLabel.stringValue = error.localizedDescription }
+        saving=true; errorLabel.stringValue="Сохранение тегов и файлов…"
+        Task { [self] in
+            do { try await library.applyAsync(patch,to:Set(records.map(\.id))); saving=false; onSaved?(); closeSheet() }
+            catch { saving=false; errorLabel.stringValue=error.localizedDescription }
+        }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { closeSheet(); return false }
     private func closeSheet() {
+        guard !saving else { return }
         guard let window else { return }
         if let parent = window.sheetParent { parent.endSheet(window); parent.makeKeyAndOrderFront(nil) }
         window.orderOut(nil); onClose?()
@@ -284,7 +290,7 @@ final class EditorButton: NSButton {
 }
 
 @MainActor extension MetadataEditor {
-    static func testAquaEditor(track: Track, storage: URL) {
+    static func testAquaEditor(track: Track, storage: URL) async {
         let library = Library(storage: storage); library.tracks = [track]
         let editor = MetadataEditor(library: library, records: [track], albumMode: false)
         precondition(!editor.tabNames.contains("Видео"))
@@ -299,12 +305,12 @@ final class EditorButton: NSButton {
         editor.selectTab(0)
         precondition(editor.fields[.title]?.stringValue == "Edited locally" && editor.draft[.volumeAdjustment] == "30")
         precondition(library.tracks[0].title == track.title)
-        editor.commit(); precondition(library.tracks[0].title == "Edited locally" && library.tracks[0].volumeAdjustment == 30)
+        editor.commit(); while editor.saving { try? await Task.sleep(nanoseconds:10_000_000) }; precondition(library.tracks[0].title == "Edited locally" && library.tracks[0].volumeAdjustment == 30)
         var other = track; other.id = "other"; other.title = "Keep individual title"; other.artist = "Different artist"
         library.tracks = [track, other]
         let group = MetadataEditor(library: library, records: [track, other], albumMode: true)
         for i in group.tabNames.indices { group.selectTab(i) }
-        group.commit(); precondition(library.tracks.map(\.title) == [track.title,other.title])
+        group.commit(); while group.saving { try? await Task.sleep(nanoseconds:10_000_000) }; precondition(library.tracks.map(\.title) == [track.title,other.title])
         print("PASS: Aqua metadata tabs, drafts across tabs, volume/artwork sliders, explicit-only group edits and commit")
     }
 }
@@ -369,4 +375,37 @@ final class EditorButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowWillClose(_ notification: Notification) { onClose?() }
+}
+
+
+@MainActor final class AquaMessageSurface: NSView {
+    override var isFlipped: Bool { true }
+    override func draw(_ rect:NSRect) { gradient(bounds,0xF2F2F2,0xE5E5E5) }
+}
+@MainActor final class AquaMessage: NSWindowController, NSWindowDelegate {
+    static var active: AquaMessage?
+    private var completion: (Bool)->Void
+    private var settled=false
+    private(set) var okay: EditorButton!
+    init(title: String, message: String, confirm: String = "ОК", cancel: Bool = false, completion: @escaping (Bool)->Void = { _ in }) {
+        self.completion=completion
+        let body=AquaMessageSurface(frame:NSRect(x:0,y:0,width:500,height:266))
+        let panel=NSPanel(contentRect:body.bounds,styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        super.init(window:panel); panel.isReleasedWhenClosed=false; panel.delegate=self; panel.appearance=NSAppearance(named:.aqua)
+        let heading=NSTextField(labelWithString:title); heading.font=font(15,bold:true); heading.frame=NSRect(x:24,y:20,width:452,height:25); body.addSubview(heading)
+        let scroll=NSScrollView(frame:NSRect(x:24,y:56,width:452,height:152)); scroll.drawsBackground=false; scroll.hasVerticalScroller=true; scroll.autohidesScrollers=true
+        let text=NSTextView(frame:NSRect(x:0,y:0,width:435,height:152)); text.isEditable=false; text.isSelectable=true; text.drawsBackground=false; text.font=font(12); text.textColor=color(0x333333); text.string=message; text.textContainer?.widthTracksTextView=true; text.isVerticallyResizable=true; text.autoresizingMask=[.width]; text.textContainer?.containerSize=NSSize(width:435,height:CGFloat.greatestFiniteMagnitude); text.layoutManager?.ensureLayout(for:text.textContainer!); text.frame.size.height=max(152,(text.layoutManager?.usedRect(for:text.textContainer!).height ?? 152)+20); scroll.documentView=text; body.addSubview(scroll)
+        // EditorButton supplies the same pulsing Aqua default state as the metadata editor.
+        let action=EditorButton(confirm,label:confirm) { [weak self] in self?.finish(true) }; action.aqua=true; action.keyEquivalent="\r"; action.frame=NSRect(x:cancel ? 302 : 356,y:224,width:cancel ? 174 : 120,height:25); body.addSubview(action)
+        okay=action
+        if cancel { let back=EditorButton("Отмена",label:"Отмена") { [weak self] in self?.finish(false) }; back.keyEquivalent="\u{1b}"; back.frame=NSRect(x:198,y:224,width:94,height:25); body.addSubview(back) }
+        ClassicWindowChrome.install(on:panel,body:body,title:title)
+    }
+    required init?(coder:NSCoder) { fatalError() }
+    static func show(for parent:NSWindow,title:String,message:String,confirm:String="ОК",cancel:Bool=false,completion:@escaping(Bool)->Void={_ in}) {
+        guard parent.attachedSheet == nil else { return }
+        let controller=AquaMessage(title:title,message:message,confirm:confirm,cancel:cancel,completion:completion); active=controller; parent.beginSheet(controller.window!)
+    }
+    func finish(_ accepted:Bool) { guard !settled else { return }; settled=true; if let window { window.sheetParent?.endSheet(window); window.orderOut(nil) }; let callback=completion; Self.active=nil; callback(accepted) }
+    func windowShouldClose(_ sender:NSWindow)->Bool { finish(false); return false }
 }

@@ -135,7 +135,8 @@ extension Track {
 
 @MainActor extension Library {
     /// Persist the candidate first. A failed atomic write leaves the in-memory library unchanged.
-    func apply(_ patch: MetadataPatch, to ids: Set<String>) throws {
+    func metadataCandidate(_ patch: MetadataPatch, to ids: Set<String>) throws -> [Track] {
+        guard !importingFiles else { throw MetadataError(message:"Дождитесь завершения импорта файлов.") }
         guard !ids.isEmpty, ids.isSubset(of: Set(tracks.map(\.id))) else { throw MetadataError(message: "Выбранные композиции больше не доступны.") }
         var candidate = tracks
         for i in candidate.indices where ids.contains(candidate[i].id) {
@@ -157,9 +158,12 @@ extension Track {
             try candidate[i].validatePlaybackRange()
         }
         Self.reconcileAlbumArtists(&candidate)
-        let normalized = try persist(candidate)
-        tracks = normalized; Covers.invalidate()
-        applyPlayerSettings(); onChange?()
+        return candidate
+    }
+    func apply(_ patch: MetadataPatch, to ids: Set<String>) throws {
+        let candidate=try metadataCandidate(patch,to:ids)
+        let transaction=try ManagedEdit(old:tracks,candidate:candidate,ids:ids,patch:patch,root:mediaRoot)
+        try commitManaged(transaction)
     }
     func applyPlayerSettings(smooth: Bool = false) {
         func adjusted(_ track: Track?) -> Float { min(1, max(0, volume * Float(1 + (track?.volumeAdjustment ?? 0) / 100))) }
@@ -255,5 +259,112 @@ struct ImportedMetadata {
             return tail.isEmpty ? genres[n] : tail
         }
         return value
+    }
+}
+
+
+struct ManagedMedia {
+    static func safe(_ name: String) -> String { SyncPlanner.component(name) }
+    static func destination(_ track: Track, root: URL, excluding: Set<String> = []) -> URL {
+        let ext=URL(fileURLWithPath:track.path ?? "audio.mp3").pathExtension.lowercased()
+        let folder=root.appendingPathComponent(track.isVideo ? "Видео" : "Музыка").appendingPathComponent(safe(track.albumDisplayArtist)).appendingPathComponent(safe(track.album))
+        let prefix=track.number > 0 ? String(format:"%02d-%02d ",track.discNumber ?? 1,track.number) : ""
+        let base=folder.appendingPathComponent(prefix+safe(track.title)).appendingPathExtension(ext)
+        var result=base; var i=1
+        while FileManager.default.fileExists(atPath:result.path) && !excluding.contains(result.path) { result=folder.appendingPathComponent(prefix+safe(track.title)+" (\(track.id.prefix(8))-\(i))").appendingPathExtension(ext); i += 1 }
+        return result
+    }
+    static func copyImport(_ track: Track, root: URL) throws -> Track {
+        guard let path=track.path else { throw MetadataError(message:"Нет исходного файла.") }
+        let source=URL(fileURLWithPath:path), output=destination(track,root:root)
+        try FileManager.default.createDirectory(at:output.deletingLastPathComponent(),withIntermediateDirectories:true)
+        try FileManager.default.copyItem(at:source,to:output)
+        var result=track; result.path=output.path; result.managedSourcePath=path; result.managedCopy=true
+        return result
+    }
+    static func properties(_ track: Track, fields: Set<MetadataField>) -> [String:String] {
+        var values=["TITLE":track.title,"ARTIST":track.artist,"ALBUM":track.album,"ALBUMARTIST":track.albumDisplayArtist]
+        let names: [MetadataField:String]=[.genre:"GENRE",.year:"DATE",.composer:"COMPOSER",.grouping:"GROUPING",.comments:"COMMENT",.lyrics:"LYRICS",.bpm:"BPM",.sortTitle:"TITLESORT",.sortArtist:"ARTISTSORT",.sortAlbum:"ALBUMSORT",.sortAlbumArtist:"ALBUMARTISTSORT",.sortComposer:"COMPOSERSORT",.isCompilation:"COMPILATION"]
+        for field in fields { if let name=names[field] { values[name]=track.value(field) } }
+        if fields.contains(.number) || fields.contains(.trackTotal) { values["TRACKNUMBER"]=String(track.number)+(track.trackTotal.map { "/\($0)" } ?? "") }
+        if fields.contains(.discNumber) || fields.contains(.discTotal) { values["DISCNUMBER"]=String(track.discNumber ?? 1)+(track.discTotal.map { "/\($0)" } ?? "") }
+        return values
+    }
+}
+final class ManagedEdit: @unchecked Sendable {
+    struct FileChange { let old: URL; let staged: URL; let destination: URL; let backup: URL }
+    var tracks: [Track]
+    private let work: URL
+    private var changes: [FileChange] = []
+    private var published: [FileChange] = []
+    init(old: [Track], candidate: [Track], ids: Set<String>, patch: MetadataPatch, root: URL) throws {
+        tracks=candidate; work=root.appendingPathComponent(".edit-"+UUID().uuidString)
+        let tagFields: Set<MetadataField> = [.title,.artist,.album,.albumArtist,.genre,.year,.composer,.grouping,.comments,.lyrics,.bpm,.sortTitle,.sortArtist,.sortAlbum,.sortAlbumArtist,.sortComposer,.isCompilation,.number,.trackTotal,.discNumber,.discTotal]
+        var writeTags = !tagFields.isDisjoint(with:patch.fields.keys)
+        switch patch.artwork { case .unchanged: break; case .remove,.replace: writeTags=true }
+        let selected=candidate.filter { writeTags && ids.contains($0.id) && $0.managedCopy == true }
+        guard !selected.isEmpty else { return }
+        try FileManager.default.createDirectory(at:work,withIntermediateDirectories:true)
+        do {
+            for track in selected {
+                guard let prior=old.first(where: { $0.id == track.id }), let path=prior.path,
+                    URL(fileURLWithPath:path).resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path+"/") else { throw MetadataError(message:"Файл находится вне управляемой медиатеки.") }
+                let original=URL(fileURLWithPath:path)
+                let staged=work.appendingPathComponent(track.id).appendingPathExtension(original.pathExtension)
+                try FileManager.default.copyItem(at:original,to:staged)
+                let art: Data?
+                switch patch.artwork { case .unchanged: art=nil; case .remove: art=Data(); case .replace(let data): art=data }
+                try ITManagedTags.write(staged,values:ManagedMedia.properties(track,fields:Set(patch.fields.keys)),artwork:art)
+                let destination=ManagedMedia.destination(track,root:root,excluding:[path])
+                let backup=work.appendingPathComponent("backup-"+track.id).appendingPathExtension(original.pathExtension)
+                changes.append(FileChange(old:original,staged:staged,destination:destination,backup:backup))
+                if let index=tracks.firstIndex(where: { $0.id == track.id }) { tracks[index].path=destination.path }
+            }
+        } catch { try? FileManager.default.removeItem(at:work); throw error }
+    }
+    func publish() throws {
+        do {
+            for change in changes {
+                try FileManager.default.createDirectory(at:change.destination.deletingLastPathComponent(),withIntermediateDirectories:true)
+                if change.destination == change.old { try FileManager.default.moveItem(at:change.old,to:change.backup) }
+                do { try FileManager.default.moveItem(at:change.staged,to:change.destination); published.append(change) }
+                catch { if FileManager.default.fileExists(atPath:change.backup.path) { try? FileManager.default.moveItem(at:change.backup,to:change.old) }; throw error }
+            }
+        } catch { rollback(); throw error }
+    }
+    func rollback() {
+        for change in published.reversed() {
+            if FileManager.default.fileExists(atPath:change.destination.path) { try? FileManager.default.removeItem(at:change.destination) }
+            if FileManager.default.fileExists(atPath:change.backup.path) { try? FileManager.default.moveItem(at:change.backup,to:change.old) }
+        }
+        published=[]
+        if !changes.contains(where:{ FileManager.default.fileExists(atPath:$0.backup.path) }) { try? FileManager.default.removeItem(at:work) }
+    }
+    func finish() {
+        for change in published where change.old != change.destination { try? FileManager.default.removeItem(at:change.old) }
+        try? FileManager.default.removeItem(at:work)
+        let root=work.deletingLastPathComponent()
+        for change in published {
+            var directory=change.old.deletingLastPathComponent()
+            while directory.path != root.path && directory.path.hasPrefix(root.path+"/") {
+                guard let children=try? FileManager.default.contentsOfDirectory(atPath:directory.path), children.isEmpty else { break }
+                do { try FileManager.default.removeItem(at:directory) } catch { break }
+                directory=directory.deletingLastPathComponent()
+            }
+        }
+    }
+}
+@MainActor extension Library {
+    func applyAsync(_ patch: MetadataPatch, to ids: Set<String>) async throws {
+        let snapshot=tracks, revision=contentRevision, root=mediaRoot
+        let candidate=try metadataCandidate(patch,to:ids)
+        let transaction=try await Task.detached { try ManagedEdit(old:snapshot,candidate:candidate,ids:ids,patch:patch,root:root) }.value
+        guard revision == contentRevision else { transaction.rollback(); throw MetadataError(message:"Медиатека изменилась. Откройте редактор заново и повторите сохранение.") }
+        try commitManaged(transaction)
+    }
+    func commitManaged(_ transaction: ManagedEdit) throws {
+        do { try transaction.publish(); let normalized=try persist(transaction.tracks); tracks=normalized; transaction.finish() }
+        catch { transaction.rollback(); throw error }
+        Covers.invalidate(); applyPlayerSettings(); onChange?()
     }
 }

@@ -33,3 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
          progress:(BOOL (^)(uint64_t sent, uint64_t total))progress error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END
+
+@interface ITManagedTags : NSObject
++ (BOOL)writeURL:(NSURL * _Nonnull)url values:(NSDictionary<NSString *,NSString *> * _Nonnull)values artwork:(NSData * _Nullable)artwork error:(NSError * _Nullable * _Nullable)error NS_SWIFT_NAME(write(_:values:artwork:));
+@end

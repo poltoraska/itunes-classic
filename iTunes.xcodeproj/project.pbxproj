@@ -115,6 +115,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = C57128001CE614BF8549D6BB /* Build configuration list for PBXNativeTarget "iTunes" */;
 			buildPhases = (
+                A03800000000000000000001 /* Build tag writer */,
 				72A8017E75795FC05F78F54C /* Sources */,
 				F01580CCB5F725E4E879D491 /* Frameworks */,
 				963488E8A773A44C9A5DC523 /* Resources */,
@@ -187,6 +188,18 @@
 			shellPath = /bin/zsh;
 			shellScript = "set -eu\n\"$PROJECT_DIR/signing.sh\"\nfor lib in \"$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/Libraries.bundle/\"*.dylib; do /usr/bin/codesign --force --keychain \"$PROJECT_DIR/.signing/iTunes.keychain-db\" --sign \"iTunes Local Development\" \"$lib\"; done\n/usr/bin/codesign --force --keychain \"$PROJECT_DIR/.signing/iTunes.keychain-db\" --sign \"iTunes Local Development\" \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\n";
 		};
+        A03800000000000000000001 /* Build tag writer */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            outputPaths = ();
+            name = "Build tag writer";
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/zsh;
+            shellScript = "\"$PROJECT_DIR/scripts/build-tags.sh\"\n";
+        };
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */

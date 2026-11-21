@@ -691,7 +691,10 @@ struct CoverFlowGeometry {
                 ("Перемешать альбом", { [weak self] in let tracks = ordered.shuffled(); if let track = tracks.first { self?.onPlayTracks?(track, tracks) } }),
                 ("Воспроизвести следующим", { [weak self] in self?.drawer.onQueue?(ordered, true) }),
                 ("Добавить в очередь позже", { [weak self] in self?.drawer.onQueue?(ordered, false) }),
-                ("Информация об альбоме…", { [weak self] in self?.onEditAlbum?(first) })
+                ("Информация об альбоме…", { [weak self] in self?.onEditAlbum?(first) }),
+                ("Показать в Finder", { [weak self] in self?.drawer.onRevealAlbum?(ordered) }),
+                ("", {}),
+                ("Удалить альбом…", { [weak self] in self?.drawer.onRemove?(ordered,true) })
             ]
         }
         return actions
@@ -938,6 +941,8 @@ final class FlowScrubber: NSControl {
         flowDetail.standalone = true
         flowDetail.onPlayTracks = { [weak self] track, queue in self?.library.play(track, within: queue) }
         for drawer in [flowDetail, stage.drawer] {
+            drawer.onRevealAlbum = { [weak self] tracks in guard let self else { return }; NSWorkspace.shared.activateFileViewerSelecting(Self.finderURLs(self.albumMembers(tracks))) }
+            drawer.onRemove = { [weak self] tracks,album in self?.confirmRemoval(tracks,album:album) }
             drawer.onEditTracks = { [weak self] tracks in self?.presentEditor(tracks, album: false) }
             drawer.playlistNames = { [weak self] in self?.library.playlists.keys.sorted() ?? [] }
             drawer.onAddToPlaylist = { [weak self] tracks, name in self?.addToPlaylist(tracks, name: name) }
@@ -1279,7 +1284,13 @@ final class FlowScrubber: NSControl {
 
     func filtered() -> [Track] {
         var result = source == "Видеоклипы" ? library.tracks.filter { $0.isVideo } : library.tracks.filter { !$0.isVideo }
-        if source == "Недавно добавленные" { result = Array(result.suffix(50).reversed()) }
+        if source == "Недавно добавленные" {
+            result=result.enumerated().sorted { a,b in
+                let left=a.element.importedAt ?? .distantPast, right=b.element.importedAt ?? .distantPast
+                if left != right { return left > right }
+                return a.element.importedAt == nil ? a.offset > b.offset : a.offset < b.offset
+            }.map(\.element)
+        }
         else if let ids = library.playlists[source] { result = ids.compactMap { id in library.tracks.first { $0.id == id } } }
         if !query.isEmpty { result = result.filter { ($0.title + " " + $0.artist + " " + $0.album + " " + $0.genre + " " + ($0.composer ?? "")).localizedCaseInsensitiveContains(query) } }
         if let groupFilter { result = result.filter { groupFilter.contains($0.id) } }
@@ -1293,7 +1304,9 @@ final class FlowScrubber: NSControl {
     }
     private func groupsFor(_ kind: GridGrouping) -> [LibraryGroup] {
         if let groups = cachedGroups[kind] { return groups }
-        let groups = sorting.groups(source == "Видеоклипы" ? cachedVisible.map { LibraryGroup(key: $0.id, title: $0.title, subtitle: $0.artist, tracks: [$0]) } : Self.groups(cachedVisible, by: kind), kind: source == "Видеоклипы" ? .albums : kind)
+        let sortedGroups = sorting.groups(source == "Видеоклипы" ? cachedVisible.map { LibraryGroup(key: $0.id, title: $0.title, subtitle: $0.artist, tracks: [$0]) } : Self.groups(cachedVisible, by: kind), kind: source == "Видеоклипы" ? .albums : kind)
+        let order=Dictionary(uniqueKeysWithValues:cachedVisible.enumerated().map { ($0.element.id,$0.offset) })
+        let groups=source == "Недавно добавленные" ? sortedGroups.sorted { ($0.tracks.map { order[$0.id] ?? Int.max }.min() ?? Int.max) < ($1.tracks.map { order[$0.id] ?? Int.max }.min() ?? Int.max) } : sortedGroups
         cachedGroups[kind] = groups; return groups
     }
     deinit { if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) } }
@@ -1424,6 +1437,7 @@ final class FlowScrubber: NSControl {
         }
     }
     func applySort() {
+        if source == "Недавно добавленные" { return }
         guard let sort = table.sortDescriptors.first, let key = sort.key else {
             if mode == 0 { rows.sort { sorting.compare($0, $1) } }
             else {
@@ -1547,6 +1561,7 @@ extension PlayerView: NSMenuDelegate {
         for name in library.playlists.keys.sorted() { actions.append(("Добавить в плейлист «" + name + "»", { [weak self] in self?.addToPlaylist(tracks, name: name) })) }
         if tracks.contains(where: { $0.path != nil }) { actions.append(("Показать в Finder", { NSWorkspace.shared.activateFileViewerSelecting(tracks.compactMap { $0.path.map { URL(fileURLWithPath: $0) } }) })) }
         if library.playlists[source] != nil { let name = source; actions.append(("Убрать из плейлиста", { [weak self] in guard let self else { return }; let ids = Set(tracks.map(\.id)); self.library.playlists[name]?.removeAll { ids.contains($0) }; self.library.save(); self.refresh() })) }
+        actions += [("", {}), ("Удалить из медиатеки…", { [weak self] in self?.confirmRemoval(tracks) })]
         ClassicActionMenu.show(actions, from: table, at: point)
     }
     @objc func contextPlay() { playSelected() }
@@ -1823,7 +1838,7 @@ struct LyricDocument {
                 // LRC remains a library edit, never a rewrite of the original media file.
                 guard let track = self.track else { return }
                 var patch = MetadataPatch(); patch.fields[.lyrics] = source
-                do { try self.library.apply(patch,to:[track.id]); self.update(self.library.tracks.first { $0.id == track.id }) }
+                do { try await self.library.applyAsync(patch,to:[track.id]); self.update(self.library.tracks.first { $0.id == track.id }) }
                 catch { self.footerText = error.localizedDescription }
             }
         }
@@ -2005,5 +2020,64 @@ actor LyricsService {
         if http.statusCode == 404 { return nil }
         guard http.statusCode == 200, data.count < 2_000_000, http.mimeType == "application/json" else { throw LyricsFailure.message("Не удалось получить текст. Попробуйте позже.") }
         return data
+    }
+}
+
+
+@MainActor extension PlayerView {
+    static func finderURLs(_ tracks: [Track]) -> [URL] { Array(Set(tracks.compactMap(\.path))).sorted().map { URL(fileURLWithPath:$0) } }
+    func albumMembers(_ requested: [Track]) -> [Track] { let keys=Set(requested.map(\.albumKey)); return library.tracks.filter { keys.contains($0.albumKey) } }
+    func confirmRemoval(_ requested: [Track], album: Bool = false) {
+        guard let window else { return }
+        let ids=Set((album ? albumMembers(requested) : requested).map(\.id)); let tracks=library.tracks.filter { ids.contains($0.id) }; guard !tracks.isEmpty else { return }
+        let alert=NSAlert(); alert.messageText=album ? "Удалить альбом «\(tracks[0].album)»?" : (tracks.count == 1 ? "Удалить «\(tracks[0].title)»?" : "Удалить выбранные композиции (\(tracks.count))?")
+        alert.informativeText="«Удалить из медиатеки» уберёт записи из библиотеки, плейлистов и очереди, сохранив файлы. «В Корзину» также переместит исходные файлы на Mac в Корзину."
+        alert.addButton(withTitle:"Удалить из медиатеки"); alert.addButton(withTitle:"Отмена")
+        if tracks.contains(where: { $0.path != nil }) { alert.addButton(withTitle:"В Корзину") }
+        alert.beginSheetModal(for:window) { [weak self] response in
+            guard let self else { return }
+            if response == .alertFirstButtonReturn { self.library.removeRecords(ids); return }
+            guard response == .alertThirdButtonReturn else { return }
+            Task {
+                let paths=Set(tracks.compactMap(\.path))
+                let outcome=await Task.detached { () -> (Set<String>,[String]) in
+                    var removed=Set<String>(), failures: [String]=[]
+                    for path in paths {
+                        switch MediaAudit.state(path) {
+                        case .missing: removed.insert(path)
+                        case .unavailable: failures.append("\(URL(fileURLWithPath:path).lastPathComponent): файл или диск недоступен")
+                        case .present:
+                            do { try FileManager.default.trashItem(at:URL(fileURLWithPath:path),resultingItemURL:nil); removed.insert(path) }
+                            catch { failures.append("\(URL(fileURLWithPath:path).lastPathComponent): \(error.localizedDescription)") }
+                        }
+                    }
+                    return (removed,failures)
+                }.value
+                let safe=Set(self.library.tracks.filter { track in track.path.map { outcome.0.contains($0) } ?? ids.contains(track.id) }.map(\.id))
+                self.library.removeRecords(safe)
+                if !outcome.1.isEmpty { self.showError("Не удалось переместить часть файлов в Корзину. Их записи сохранены.\n"+outcome.1.prefix(6).joined(separator:"\n")) }
+            }
+        }
+    }
+    func auditMediaFiles() {
+        guard !importing, let window else { return }
+        importing=true; notice="Проверка файлов медиатеки…"; needsDisplay=true
+        let tracks=library.tracks
+        Task { [self] in
+            let audit=await Task.detached { MediaAudit.scan(tracks) }.value
+            importing=false; needsDisplay=true
+            let unavailable=audit.unavailable > 0 ? "\nНе удалось проверить: \(audit.unavailable). Записи с отключённых дисков и без доступа сохраняются." : ""
+            guard !audit.missing.isEmpty else { AquaMessage.show(for:window,title:"Проверка медиатеки",message:"Отсутствующие файлы не найдены."+unavailable); return }
+            let message="Не найдены файлы: \(audit.missing.count). Убрать их записи из медиатеки, плейлистов и очереди? Исходные файлы команда не удаляет."+unavailable+"\n\n"+audit.missing.prefix(12).map { $0.title }.joined(separator:"\n")
+            AquaMessage.show(for:window,title:"Проверка медиатеки",message:message,confirm:"Убрать отсутствующие",cancel:true) { [weak self] accepted in
+                guard let self, accepted else { return }
+                Task {
+                    let stillMissing=await Task.detached { MediaAudit.scan(audit.missing).missing }.value
+                    let paths=Dictionary(uniqueKeysWithValues:stillMissing.map { ($0.id,$0.path) })
+                    let ids=Set(self.library.tracks.filter { track in paths[track.id].map { $0 == track.path } ?? false }.map(\.id))
+                    self.library.removeRecords(ids)
+                }
+            }
+        }
     }
 }

@@ -641,3 +641,11 @@ struct PlaybackPlan {
     library.stopPlayback(); library.flushPendingSave()
     print("PASS: Up Next duplicate identities, insertion order, context promotion/demotion, 100 reorders without changing playback, removal/clear, skip/jump/history, album continuation, repeat modes and real audio transitions")
 }
+
+extension PlaybackPlan {
+    mutating func removeTracks(_ ids: Set<String>) {
+        manual.removeAll { ids.contains($0.trackID) }; continuation.removeAll { ids.contains($0.trackID) }; later.removeAll { ids.contains($0.trackID) }
+        cycle.removeAll { ids.contains($0) }; history.removeAll { ids.contains($0.entry.trackID) }
+        if let current, ids.contains(current.entry.trackID) { self.current=nil }
+    }
+}

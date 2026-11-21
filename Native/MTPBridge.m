@@ -330,3 +330,16 @@ static int transferProgress(uint64_t sent, uint64_t total, const void *context) 
     return YES;
 }
 @end
+
+@protocol ITWriterProtocol
++ (BOOL)writeURL:(NSURL *)url values:(NSDictionary *)values artwork:(NSData *)artwork error:(NSError **)error;
+@end
+@implementation ITManagedTags
++ (BOOL)writeURL:(NSURL *)url values:(NSDictionary *)values artwork:(NSData *)artwork error:(NSError **)error {
+    static void *writer; static dispatch_once_t once;
+    dispatch_once(&once, ^{ NSString *path=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"Libraries.bundle/libITTagWriter.dylib"]; writer=dlopen(path.fileSystemRepresentation,RTLD_NOW|RTLD_LOCAL); });
+    Class cls=NSClassFromString(@"ITTagWriter");
+    if(!writer || !cls) return fail(error,80,@"Не удалось загрузить модуль записи тегов. В этой сборке требуется macOS 27 или новее.");
+    return [(id<ITWriterProtocol>)cls writeURL:url values:values artwork:artwork error:error];
+}
+@end

@@ -20,3 +20,7 @@ This is an unofficial project inspired by iTunes 9 and Mac OS X Snow Leopard. Ap
 ## Test fixtures
 
 `Tests/Fixtures` contains small artificial metadata/audio fixtures used by the automated test suite. No imported user music library, play history, playlists, lyrics cache or Android inventory is distributed.
+
+## TagLib
+
+TagLib 2.3.2 is used for metadata writing without audio re-encoding. Sources: https://github.com/taglib/taglib/tree/v2.3.2 . Replaceable dynamic library and native writer live in Resources/Libraries.bundle and Native/TagWriter.mm. LGPL/MPL texts are included as TagLib-COPYING.LGPL and TagLib-COPYING.MPL. Headers retain upstream copyright notices. Rebuild the writer with scripts/build-tags.sh.

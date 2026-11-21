@@ -18,6 +18,9 @@ struct Track: Codable, Identifiable, Equatable {
     var genre: String
     var duration: Double
     var number: Int
+    var managedCopy: Bool?
+    var managedSourcePath: String?
+    var importedAt: Date?
     var path: String?
     var artwork: Data?
     var artworkPath: String?
@@ -112,6 +115,7 @@ private enum LibraryStorage {
 }
 
 @MainActor final class Library: NSObject, AVAudioPlayerDelegate {
+    private(set) var importingFiles=false
     var contentRevision = 0
     var tracks: [Track] = [] { didSet { contentRevision += 1 } }
     var playlists: [String: [String]] = [:]
@@ -178,14 +182,18 @@ private enum LibraryStorage {
     var onImportProgress: ((Int, Int) -> Void)?
     var current: Track? { tracks.first { $0.id == currentID } }
     var playing: Bool { videoPlayer.map { $0.rate != 0 } ?? player?.isPlaying ?? false }
+    let mediaRoot: URL
+    let managedImports: Bool
     let storage: URL
     private(set) var albumMetadataVersion: Int?
     private(set) var upgradingMetadata = false
     private(set) var metadataProgress = 0
     private(set) var metadataTotal = 0
 
-    init(storage: URL? = nil, defaults: UserDefaults? = nil) {
+    init(storage: URL? = nil, defaults: UserDefaults? = nil, managedImports: Bool? = nil) {
         // Temporary/private test libraries never write the user's playback preferences.
+        self.managedImports=managedImports ?? (storage == nil)
+        mediaRoot=storage.map { $0.deletingLastPathComponent().appendingPathComponent("Media") } ?? FileManager.default.urls(for:.musicDirectory,in:.userDomainMask)[0].appendingPathComponent("iTunes Classic Media")
         playbackDefaults = defaults ?? (storage == nil ? .standard : nil)
         if let saved = playbackDefaults?.object(forKey: Self.volumePreferenceKey) as? NSNumber, saved.doubleValue.isFinite {
             storedVolume = Float(min(1, max(0, saved.doubleValue)))
@@ -333,6 +341,7 @@ private enum LibraryStorage {
         else { videoPlayer?.pause(); onPlaybackChange?() }
     }
     func importURLs(_ urls: [URL]) async -> (Int, Int) {
+        guard !importingFiles else { return (0,urls.count) }; importingFiles=true; defer { importingFiles=false }
         let extensions = Set(["mp3", "m4a", "aac", "aif", "aiff", "wav", "caf", "flac", "alac", "mp4", "m4v", "mov"])
         let files = await Task.detached(priority: .userInitiated) {
             func discover() -> [URL] {
@@ -349,9 +358,11 @@ private enum LibraryStorage {
             }
             return discover()
         }.value
+        let initialTracks=tracks
+        let batchDate=Date()
         let firstNewIndex = tracks.count
         var added = 0; var failed = 0
-        var paths = Set(tracks.compactMap(\.path))
+        var paths = Set(tracks.compactMap(\.path)+tracks.compactMap(\.managedSourcePath))
         for (offset, file) in files.enumerated() {
             defer { onImportProgress?(offset + 1, files.count) }
             let path = file.standardizedFileURL.path
@@ -384,6 +395,7 @@ private enum LibraryStorage {
                     }.value
                 }
                 tracks.append(Track(id: UUID().uuidString, title: title, artist: artist, album: album, genre: "—", duration: duration, number: 0, path: path, artwork: artwork, mediaKind: isVideo ? "video" : "audio"))
+                tracks[tracks.count-1].importedAt=batchDate
                 paths.insert(path); added += 1
             } catch { failed += 1 }
         }
@@ -392,7 +404,18 @@ private enum LibraryStorage {
             if let path = tracks[i].path { await updateAlbumMetadata(at: i, url: URL(fileURLWithPath: path)) }
         }
         Self.reconcileAlbumArtists(&tracks)
-        save(); onChange?(); return (added, failed)
+        var created: [String]=[]
+        if managedImports {
+            var rejected=Set<String>()
+            for i in firstNewIndex..<tracks.count {
+                let track=tracks[i], root=mediaRoot
+                do { let imported=try await Task.detached { try ManagedMedia.copyImport(track,root:root) }.value; tracks[i]=imported; created.append(imported.path!) }
+                catch { rejected.insert(track.id); added -= 1; failed += 1 }
+            }
+            tracks.removeAll { rejected.contains($0.id) }
+        }
+        if !save() { for path in created { try? FileManager.default.removeItem(atPath:path) }; tracks=initialTracks; failed += added; added=0 }
+        onChange?(); return (added, failed)
     }
     // Re-read legacy tag formats once, preserving all explicit edits and playlist membership.
     func upgradeAlbumMetadata() async {
@@ -634,5 +657,44 @@ private struct PreparedTransition {
     }
     private func stopCrossfadeResources() {
         crossfadeTimer?.invalidate(); crossfadeTimer = nil; invalidateCrossfadePreparation(); finishCrossfade()
+    }
+}
+
+
+// Existence checking is read-only. Offline volumes and denied access are not deletions.
+enum MediaFileState { case present, missing, unavailable }
+struct MediaAudit {
+    var missing: [Track] = []
+    var unavailable = 0
+    static func state(_ path: String, volumes: [URL]? = nil) -> MediaFileState {
+        let url=URL(fileURLWithPath:path).standardizedFileURL
+        if url.path.hasPrefix("/Volumes/") {
+            let mounted=volumes ?? FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys:nil,options:[]) ?? []
+            guard mounted.contains(where: { $0.path != "/" && (url.path == $0.path || url.path.hasPrefix($0.path+"/")) }) else { return .unavailable }
+        }
+        var info=stat()
+        if stat(url.path,&info) == 0 { return (info.st_mode & S_IFMT) == S_IFREG ? .present : .unavailable }
+        return errno == ENOENT || errno == ENOTDIR ? .missing : .unavailable
+    }
+    static func scan(_ tracks: [Track]) -> Self {
+        let volumes=FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys:nil,options:[]) ?? []
+        var result=Self()
+        for track in tracks { guard let path=track.path else { continue }; switch state(path,volumes:volumes) { case .missing: result.missing.append(track); case .unavailable: result.unavailable += 1; case .present: break } }
+        return result
+    }
+}
+@MainActor extension Library {
+    @discardableResult func removeRecords(_ ids: Set<String>) -> Bool {
+        guard !importingFiles else { onError?("Дождитесь завершения импорта файлов."); return false }
+        let oldTracks=tracks, oldPlaylists=playlists
+        let removed=ids.intersection(tracks.map(\.id)); guard !removed.isEmpty else { return true }
+        tracks.removeAll { removed.contains($0.id) }
+        for name in playlists.keys { playlists[name]?.removeAll { removed.contains($0) } }
+        guard save() else { tracks=oldTracks; playlists=oldPlaylists; return false }
+        finishCrossfade()
+        if let currentID, removed.contains(currentID) { stopPlayback(); self.currentID=nil }
+        queue.removeAll { removed.contains($0) }; playbackPlan.removeTracks(removed)
+        onQueueChange?(); onPlaybackChange?(); onChange?(); systemMedia?.update()
+        return true
     }
 }

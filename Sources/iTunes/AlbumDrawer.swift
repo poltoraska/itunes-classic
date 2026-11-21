@@ -141,6 +141,8 @@ final class AlbumPaletteBox: NSObject { let value: AlbumPalette; init(_ value: A
     var selectedTracks: [Track] { orderedTracks.filter { selection.ids.contains($0.id) } }
     var onEditTracks: (([Track]) -> Void)?
     var onAddToPlaylist: (([Track], String) -> Void)?
+    var onRevealAlbum: (([Track]) -> Void)?
+    var onRemove: (([Track], Bool) -> Void)?
     var playlistNames: (() -> [String])?
     override var acceptsFirstResponder: Bool { true }
     func select(_ id: String, modifiers: NSEvent.ModifierFlags = [], context: Bool = false) {
@@ -160,6 +162,7 @@ final class AlbumPaletteBox: NSObject { let value: AlbumPalette; init(_ value: A
             (tracks.count == 1 ? "Информация о композиции…" : "Информация о композициях…", { [weak self] in self?.onEditTracks?(tracks) })
         ]
         for name in playlistNames?() ?? [] { actions.append(("В плейлист «" + name + "»", { [weak self] in self?.onAddToPlaylist?(tracks, name) })) }
+        actions += [("Показать в Finder", { NSWorkspace.shared.activateFileViewerSelecting(PlayerView.finderURLs(tracks)) }), ("", {}), ("Удалить из медиатеки…", { [weak self] in self?.onRemove?(tracks,false) })]
         return actions
     }
     override func keyDown(with event: NSEvent) {
@@ -305,6 +308,8 @@ final class AlbumPaletteBox: NSObject { let value: AlbumPalette; init(_ value: A
         ]
         if !standalone { actions.append(("Показать списком", { [weak self] in self?.showListFromMenu() })) }
         actions.append(("Информация об альбоме…", { [weak self] in self?.editFromMenu() }))
+        let tracks=orderedTracks
+        actions += [("Показать в Finder", { [weak self] in self?.onRevealAlbum?(tracks) }), ("", {}), ("Удалить альбом…", { [weak self] in self?.onRemove?(tracks,true) })]
         ClassicActionMenu.show(actions, from: controls[3])
     }
     @objc private func playFromMenu() { playAlbum() }

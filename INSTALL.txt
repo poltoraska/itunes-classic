@@ -1,5 +1,5 @@
-iTunes Classic 0.36 — первая публичная сборка
-Apple Silicon · macOS 13+ (Android-синхронизация: macOS 27+)
+iTunes Classic 0.39 — экспериментальная сборка
+Apple Silicon · macOS 13+ (Android и запись тегов: macOS 27+)
 
 Перетащите iTunes.app на значок Applications («Программы»).
 Извлеките DMG и запустите приложение из «Программ».

@@ -3,6 +3,7 @@ set -euo pipefail
 cd "${0:A:h}"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-cache"
 mkdir -p .build/release
+./scripts/build-tags.sh
 xcrun clang -mmacosx-version-min=13.0 -fobjc-arc -fmodules -I Native/include -c Native/MTPBridge.m -o .build/release/MTPBridge.o
 xcrun swiftc -import-objc-header Native/include/MTPBridge.h .build/release/MTPBridge.o -swift-version 5 -O -target "$(uname -m)-apple-macosx13.0" -module-cache-path "$PWD/.build/clang-cache" Sources/iTunes/*.swift -o .build/release/iTunes
 APP="$PWD/build/iTunes.app"
