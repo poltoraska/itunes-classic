@@ -187,6 +187,7 @@ final class RetroButton: NSButton {
     var selected = false
     var dark = false
     var aqua = false
+    var leadingGlyph: MetalGlyph?
     var fontSize: CGFloat = 11
     var segmentIndex: Int?
     var segmentCount = 4
@@ -319,6 +320,11 @@ final class RetroButton: NSButton {
         stroke(r, color(0x777A7E), radius: round ? r.height / 2 : segmentIndex == nil ? 4 : 0)
         if !round { let p = NSBezierPath(); p.move(to: NSPoint(x: r.minX + 5, y: r.minY + 1.5)); p.line(to: NSPoint(x: r.maxX - 5, y: r.minY + 1.5)); color(0xFFFFFF, active ? 0.1 : 0.7).setStroke(); p.stroke() }
         NSGraphicsContext.restoreGraphicsState()
+        if let glyph=leadingGlyph {
+            glyph.draw(in:NSRect(x:5,y:(bounds.height-16)/2,width:18,height:16),pressed:isHighlighted)
+            centeredGlyphText(symbol,in:NSRect(x:25,y:0,width:max(1,bounds.width-29),height:bounds.height),size:fontSize,ink:color(0x3C4045),bold:true)
+            return
+        }
         if let glyph = MetalGlyph.playback(symbol) { glyph.draw(in: bounds, pressed: isHighlighted); return }
         centeredGlyphText(symbol, in: bounds.insetBy(dx: 3, dy: 2), size: round ? 16 : fontSize, ink: dark || (aqua && active) ? .white : color(0x3C4045), bold: true)
     }

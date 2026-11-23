@@ -2,6 +2,8 @@ import AppKit
 import AVFoundation
 import MediaPlayer
 import CryptoKit
+import AudioToolbox
+import CoreMedia
 
 private enum MetadataTextCache {
     static let normalized: NSCache<NSString, NSString> = { let cache = NSCache<NSString, NSString>(); cache.countLimit = 20000; return cache }()
@@ -122,6 +124,9 @@ private enum LibraryStorage {
     var currentID: String?
     var systemMedia: SystemMedia?
     var player: AVAudioPlayer?
+    var videoMeterTask: Task<Void,Never>?
+    var videoMeterLevels: [Float]=[]
+    var videoMeterGeneration=UUID()
     var videoPlayer: AVPlayer?
     private var videoEndObserver: NSObjectProtocol?
     private var videoStatusObserver: NSKeyValueObservation?
@@ -136,6 +141,7 @@ private enum LibraryStorage {
         systemMedia?.update()
     }
     func stopPlayback() {
+        videoMeterTask?.cancel(); videoMeterTask=nil; videoMeterGeneration=UUID(); videoMeterLevels=[]
         stopCrossfadeResources()
         player?.stop(); player = nil; videoPlayer?.pause(); videoPlayer = nil
         if let videoEndObserver { NotificationCenter.default.removeObserver(videoEndObserver) }
@@ -279,8 +285,12 @@ private enum LibraryStorage {
             if track.isVideo {
                 guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
                 let item = AVPlayerItem(url: URL(fileURLWithPath: path))
+                // Keep AVPlayerView's rendering connection intact across clip changes.
+                // Only the item changes; observers and metering still belong to the new clip.
+                let video = videoPlayer ?? AVPlayer()
                 stopPlayback(); currentID = track.id
-                let video = AVPlayer(playerItem: item); videoPlayer = video; applyPlayerSettings()
+                video.replaceCurrentItem(with: item); videoPlayer = video
+                applyPlayerSettings(); startVideoMeter(URL(fileURLWithPath:path))
                 videoEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
                     Task { @MainActor in guard self?.videoPlayer?.currentItem === item else { return }; self?.advanceAfterFinish() }
                 }
@@ -695,6 +705,92 @@ struct MediaAudit {
         if let currentID, removed.contains(currentID) { stopPlayback(); self.currentID=nil }
         queue.removeAll { removed.contains($0) }; playbackPlan.removeTracks(removed)
         onQueueChange?(); onPlaybackChange?(); onChange?(); systemMedia?.update()
+        return true
+    }
+}
+
+
+/// Decode only the sound track; retain small time-aligned RMS bins, never video frames or full PCM.
+struct VideoMeterEnvelope {
+    static let interval=0.05
+    static func read(_ url: URL, publish: @escaping @Sendable ([Float]) async -> Void) async -> [Float] {
+        let asset=AVURLAsset(url:url)
+        guard let track=try? await asset.loadTracks(withMediaType:.audio).first,
+            let reader=try? AVAssetReader(asset:asset) else { return [] }
+        let output=AVAssetReaderTrackOutput(track:track,outputSettings:[AVFormatIDKey:kAudioFormatLinearPCM,AVLinearPCMIsFloatKey:true,AVLinearPCMBitDepthKey:32,AVLinearPCMIsNonInterleaved:false,AVLinearPCMIsBigEndianKey:false])
+        output.alwaysCopiesSampleData=false
+        guard reader.canAdd(output) else { return [] }; reader.add(output)
+        guard reader.startReading() else { return [] }; defer { reader.cancelReading() }
+        var levels: [Float]=[]; var lastPublished=Date.distantPast
+        while !Task.isCancelled, let sample=output.copyNextSampleBuffer() {
+            guard let block=CMSampleBufferGetDataBuffer(sample) else { continue }
+            let length=CMBlockBufferGetDataLength(block)
+            guard length > 0, length <= 4*1024*1024 else { continue }
+            var bytes=Data(count:length)
+            let status=bytes.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(block,atOffset:0,dataLength:length,destination:$0.baseAddress!) }
+            guard status == kCMBlockBufferNoErr else { continue }
+            let rms: Float=bytes.withUnsafeBytes { raw in
+                var squares: Double=0
+                for i in 0..<(length/4) { let value=raw.loadUnaligned(fromByteOffset:i*4,as:Float.self); if value.isFinite { squares += Double(value)*Double(value) } }
+                return Float(sqrt(squares/Double(length/4)))
+            }
+            let start=CMSampleBufferGetPresentationTimeStamp(sample).seconds
+            let duration=CMSampleBufferGetDuration(sample).seconds
+            guard start.isFinite, start >= 0, start < 21600 else { continue }
+            let first=Int(start/interval), last=min(432000,Int((start+(duration.isFinite ? max(0,duration) : 0))/interval))
+            if levels.count <= last { levels.append(contentsOf:repeatElement(0,count:last+1-levels.count)) }
+            for i in first...last { levels[i]=max(levels[i],rms) }
+            if Date().timeIntervalSince(lastPublished)>0.25 { await publish(levels); lastPublished=Date() }
+        }
+        return Task.isCancelled ? [] : levels
+    }
+    static func strength(_ levels:[Float], at time:Double)->Double {
+        guard time.isFinite, time >= 0, time < Double(levels.count)*interval else { return 0 }
+        let index=Int(time/interval); guard levels.indices.contains(index), levels[index] > 0 else { return 0 }
+        return min(1,max(0,(20*log10(Double(levels[index]))+55)/55))
+    }
+}
+@MainActor extension Library {
+    func startVideoMeter(_ url:URL) {
+        videoMeterTask?.cancel(); videoMeterLevels=[]
+        let generation=UUID(); videoMeterGeneration=generation
+        videoMeterTask=Task.detached(priority:.utility) { [weak self] in
+            let levels=await VideoMeterEnvelope.read(url) { partial in
+                await MainActor.run { guard let self, self.videoMeterGeneration == generation else { return }; self.videoMeterLevels=partial }
+            }
+            await MainActor.run { guard let self, self.videoMeterGeneration == generation else { return }; self.videoMeterLevels=levels }
+        }
+    }
+    var meterStrength:Double {
+        guard playing else { return 0 }
+        if videoPlayer != nil { return VideoMeterEnvelope.strength(videoMeterLevels,at:playbackTime) }
+        player?.updateMeters(); let db=player?.averagePower(forChannel:0) ?? -100
+        return db.isFinite ? min(1,max(0,(Double(db)+55)/55)) : 0
+    }
+}
+
+
+@MainActor extension Library {
+    /// Prepare IDs in a worker. Probe only until the first playable path; never open every movie to start.
+    @discardableResult func playAllVideosShuffled() async -> Bool {
+        let snapshot=tracks.filter { $0.isVideo }.map { ($0.id,$0.path) }
+        guard !snapshot.isEmpty else { return false }
+        let previousID=currentID, previousVideo=videoPlayer, previousAudio=player
+        let prepared=await Task.detached(priority:.userInitiated) { () -> ([String],String?) in
+            let order=snapshot.shuffled()
+            let first=order.first { item in item.1.map { FileManager.default.isReadableFile(atPath:$0) } ?? false }
+            return (order.map { $0.0 },first?.0)
+        }.value
+        guard currentID == previousID, videoPlayer === previousVideo, player === previousAudio else { return false }
+        let lookup=Dictionary(uniqueKeysWithValues:tracks.filter { $0.isVideo }.map { ($0.id,$0) })
+        guard let firstID=prepared.1, let first=lookup[firstID] else { onError?("Нет доступных видеоклипов для воспроизведения. Проверьте файлы медиатеки."); return false }
+        let remaining=prepared.0.filter { $0 != firstID && lookup[$0] != nil }
+        let ids=[firstID]+remaining
+        let oldPlan=playbackPlan, oldQueue=queue, oldShuffle=shuffle
+        // This explicit command starts a fresh video context, including replacing an old manual queue.
+        var plan=PlaybackPlan(); plan.start(ids,at:firstID,title:"Из видеотеки · перемешано",shuffled:false)
+        playbackPlan=plan; queue=ids; shuffle=true
+        guard play(first) else { shuffle=oldShuffle; playbackPlan=oldPlan; queue=oldQueue; return false }
         return true
     }
 }

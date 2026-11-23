@@ -86,7 +86,7 @@ struct LibrarySortSettings: Codable, Equatable {
                 func value(_ track: Track, _ title: String?) -> String {
                     switch field {
                     case .title: return title ?? track.sortTitle ?? track.title
-                    case .artist: return title != nil ? (track.sortAlbumArtist ?? track.albumDisplayArtist) : (track.sortArtist ?? track.artist)
+                    case .artist: if track.isVideo { return track.sortArtist ?? track.artist }; return title != nil ? (track.sortAlbumArtist ?? track.albumDisplayArtist) : (track.sortArtist ?? track.artist)
                     case .genre: return track.genre
                     case .year: return ""
                     }
@@ -108,7 +108,7 @@ struct LibrarySortSettings: Codable, Equatable {
             return t
         }
         let prepared = groups.map { group -> (LibraryGroup, Track, String) in
-            let title = kind == .albums && !group.tracks[0].isVideo ? (group.tracks[0].sortAlbum ?? group.title) : group.title
+            let title = kind == .albums ? (group.tracks[0].isVideo ? (group.tracks[0].sortTitle ?? group.title) : (group.tracks[0].sortAlbum ?? group.title)) : group.title
             return (group, representative(group), title)
         }
         return prepared.sorted { compare($0.1, $1.1, titleA: $0.2, titleB: $1.2) }.map { $0.0 }
@@ -802,9 +802,15 @@ final class FlowScrubber: NSControl {
     override var isFlipped: Bool { true }
     let library: Library
     let sortDefaults: UserDefaults
-    var sorting: LibrarySortSettings
+    var musicSorting=LibrarySortSettings()
+    var videoSorting=LibrarySortSettings(primary:.artist)
+    var sorting: LibrarySortSettings {
+        get { source == "Видеоклипы" ? videoSorting : musicSorting }
+        set { if source == "Видеоклипы" { videoSorting=newValue } else { musicSorting=newValue } }
+    }
     let videoView = AVPlayerView()
     lazy var videoControls = InlineVideoControls(library: library)
+    var preparingVideoShuffle=false
     var showingVideo = false
     private var presentedVideoID: String?
     let table = LibraryTrackTable()
@@ -850,7 +856,7 @@ final class FlowScrubber: NSControl {
     let sidebarWidth: CGFloat = 196
     let coverSize = AquaSlider()
     var editor: MetadataEditor?
-    var source = "Музыка"
+    var source = "Музыка" { didSet { if oldValue != source { table.sortDescriptors=[] } } }
     var query = ""
     var albumFilter: String?
     var showSidebarArtwork = true
@@ -917,7 +923,8 @@ final class FlowScrubber: NSControl {
     }
 
     init(library: Library, sortDefaults: UserDefaults = .standard) {
-        self.sortDefaults = sortDefaults; sorting = LibrarySortSettings.load(sortDefaults)
+        self.sortDefaults = sortDefaults; musicSorting = LibrarySortSettings.load(sortDefaults)
+        if let data=sortDefaults.data(forKey:"library.video-sort.v1"), let saved=try? JSONDecoder().decode(LibrarySortSettings.self,from:data) { videoSorting=saved }
         self.library = library; super.init(frame: NSRect(x: 0, y: 0, width: 1160, height: 760))
         wantsLayer = true
         let initialContent = NSRect(x: sidebarWidth, y: 88, width: bounds.width - sidebarWidth, height: bounds.height - 112)
@@ -993,6 +1000,7 @@ final class FlowScrubber: NSControl {
     func configureControls() {
         let closeVideo = addButton("close-video", "×", "Вернуться к видеоклипам") { [weak self] in self?.browseWhileVideoPlays() }
         let returnVideo=addButton("return-video", "Вернуться к клипу", "Вернуться к текущему клипу без перемотки") { [weak self] in self?.showCurrentVideo() }; returnVideo.fontSize=10
+        let shuffleVideos=addButton("shuffle-videos", "Перемешать все", "Перемешать все видеоклипы и воспроизвести") { [weak self] in self?.shuffleAllVideos() }; shuffleVideos.fontSize=10; shuffleVideos.leadingGlyph = .shuffle
         closeVideo.round = true; closeVideo.dark = true
         let close = addButton("close", "", "Закрыть окно") { [weak self] in self?.window?.performClose(nil) }; close.traffic = 0xF4796C; close.trafficSymbol = .close
         let minimize = addButton("minimize", "", "Свернуть окно") { [weak self] in self?.window?.miniaturize(nil) }; minimize.traffic = 0xF3CA57; minimize.trafficSymbol = .minimize
@@ -1109,7 +1117,7 @@ final class FlowScrubber: NSControl {
         buttons["artwork-header"]?.selected = showSidebarArtwork
         buttons["artwork-header"]?.needsDisplay = true
         let left = sidebarWidth; let top: CGFloat = 88; let bottom: CGFloat = 24
-        let lyricsWidth: CGFloat = showsLyrics && !mini && !showingVideo ? 292 : 0
+        let lyricsWidth: CGFloat = showsLyrics && source != "Видеоклипы" && !mini && !showingVideo ? 292 : 0
         lyricsPane.isHidden = lyricsWidth == 0; lyricsPane.frame = NSRect(x:w-lyricsWidth,y:top,width:lyricsWidth,height:max(0,h-top-bottom))
         let content = NSRect(x: left, y: top, width: w - left - lyricsWidth, height: max(0, h - top - bottom))
         albumScroll.isHidden = mini || mode == 0 || mode == 1
@@ -1137,6 +1145,10 @@ final class FlowScrubber: NSControl {
         for button in groupingButtons { button.isHidden = mini || mode != 3 || source == "Видеоклипы" }
         buttons["back"]?.isHidden = mini || groupFilter == nil
         coverSize.isHidden = mini || mode != 3
+        buttons["lyrics"]?.isHidden = mini || source == "Видеоклипы"
+        buttons["shuffle-videos"]?.isHidden = mini || source != "Видеоклипы" || showingVideo
+        buttons["shuffle-videos"]?.isEnabled = !preparingVideoShuffle && library.tracks.contains { $0.isVideo }
+        buttons["shuffle-videos"]?.frame = NSRect(x:groupFilter == nil ? sidebarWidth+12 : max(sidebarWidth+12,260),y:68,width:154,height:18)
         buttons["lyrics"]?.isEnabled = library.playing && library.current?.isVideo != true
         buttons["lyrics"]?.selected = showsLyrics
         buttons["info"]?.isEnabled = mode != 3 || gridGrouping == .albums
@@ -1152,7 +1164,7 @@ final class FlowScrubber: NSControl {
         buttons["close-video"]?.isHidden = videoView.isHidden
         if !videoView.isHidden {
             albumScroll.isHidden = true; tableScroll.isHidden = true; flowDetailScroll.isHidden = true
-            for key in ["info", "lyrics", "back", "import", "import-library", "artwork-header"] { buttons[key]?.isHidden = true }
+            for key in ["info", "lyrics", "shuffle-videos", "back", "import", "import-library", "artwork-header"] { buttons[key]?.isHidden = true }
             groupingButtons.forEach { $0.isHidden = true }; coverSize.isHidden = true
         }
         if fullScreenVideo { subviews.forEach { $0.isHidden = $0 !== videoView && $0 !== videoControls }; videoControls.isHidden = false }
@@ -1185,7 +1197,7 @@ final class FlowScrubber: NSControl {
         fill(NSRect(x: 0, y: 65.5, width: w, height: 0.5), color(0x8E8E8E))
         fill(NSRect(x: 0, y: 66, width: w, height: 0.5), .white)
         fill(NSRect(x: 0, y: 87.5, width: w, height: 0.5), color(0xA5A5A5))
-        if mode != 3 || source == "Видеоклипы" {
+        if mode != 3 && source != "Видеоклипы" {
             engravedText(groupTitle ?? source, NSRect(x: sidebarWidth + (groupFilter == nil ? 12 : 106), y: 71, width: w - 400, height: 15), size: 10, ink: color(0x4A4A4A), bold: true)
         }
         drawSidebar()
@@ -1206,6 +1218,7 @@ final class FlowScrubber: NSControl {
         engravedText(importing || library.upgradingMetadata ? notice : stats, NSRect(x: 170, y: h - 18, width: w - 340, height: 14), size: 10, ink: color(0x4B4B4B), alignment: .center)
     }
 
+    static func lcdSubtitle(_ track:Track,mini:Bool=false)->String { mini || track.isVideo ? track.artist : track.artist+" — "+track.album }
     func drawLCD() {
         let r = lcdRect
         gradient(r, 0x555B50, 0xF4F5ED, radius: 4)
@@ -1223,9 +1236,7 @@ final class FlowScrubber: NSControl {
         let inner = NSRect(x: r.minX + 22, y: r.minY + 5, width: r.width - (mini ? 44 : 72), height: 26)
         let metrics = lcdMetrics
         if spectrum {
-            library.player?.updateMeters()
-            let db = library.player?.averagePower(forChannel: 0) ?? -100
-            let strength = library.playing && db.isFinite ? min(1, max(0, (Double(db) + 55) / 55)) : 0
+            let strength = library.meterStrength
             let bars = metrics.spectrum
             NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: bars).addClip()
             for i in 0..<25 {
@@ -1236,7 +1247,7 @@ final class FlowScrubber: NSControl {
             NSGraphicsContext.restoreGraphicsState()
         } else {
             text(shown?.title ?? "iTunes", NSRect(x: inner.minX, y: r.minY + 3, width: inner.width, height: mini ? 15 : 12), size: 10, ink: color(0x3F4832), bold: true, alignment: .center)
-            text(shown.map { mini ? $0.artist : $0.artist + " — " + $0.album } ?? "Нет выбранной композиции", NSRect(x: inner.minX, y: r.minY + (mini ? 16 : 14), width: inner.width, height: mini ? 13 : 10), size: 9, ink: color(0x60694D), alignment: .center)
+            text(shown.map { Self.lcdSubtitle($0,mini:mini) } ?? "Нет выбранной композиции", NSRect(x: inner.minX, y: r.minY + (mini ? 16 : 14), width: inner.width, height: mini ? 13 : 10), size: 9, ink: color(0x60694D), alignment: .center)
         }
         let elapsed = library.playbackTime; let duration = library.hasPlayback ? library.playbackDuration : shown?.duration ?? 0
         text(timeString(elapsed), metrics.elapsed, size: 9, ink: color(0x60694D))
@@ -1323,7 +1334,8 @@ final class FlowScrubber: NSControl {
         flowDetail.currentID = library.currentID; flowDetail.playing = library.playing
         stage.drawer.currentID = library.currentID; stage.drawer.playing = library.playing
         if let clip = library.current, clip.isVideo, library.videoPlayer != nil {
-            if presentedVideoID != clip.id || videoView.player !== library.videoPlayer { showingVideo = true; presentedVideoID = clip.id; videoView.player = library.videoPlayer }
+            if presentedVideoID != clip.id { showingVideo = true; presentedVideoID = clip.id }
+            if videoView.player !== library.videoPlayer { showingVideo = true; videoView.player = library.videoPlayer }
         } else { showingVideo = false; presentedVideoID = nil; videoView.player = nil }
         playButton.symbol = library.playing ? "Ⅱ" : "▶"; playButton.needsDisplay = true
         if mode != 2 && !rows.isEmpty { table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: IndexSet(integer: 0)) }
@@ -1363,7 +1375,7 @@ final class FlowScrubber: NSControl {
         if sorting.secondary == sorting.primary { sorting.secondary = nil }
         if let ascending { sorting.ascending = ascending }
         if let yearAscending { sorting.yearAscending = yearAscending }
-        sorting.save(sortDefaults)
+        if source == "Видеоклипы" { if let data=try? JSONEncoder().encode(sorting) { sortDefaults.set(data,forKey:"library.video-sort.v1") } } else { sorting.save(sortDefaults) }
         table.sortDescriptors = []; refresh()
     }
     func setMode(_ value: Int) { stage.stopFlowMotion(); if value == 3 { groupFilter = nil; groupTitle = nil }; mode = value; stage.grid = mode == 3; refresh() }
@@ -2078,6 +2090,18 @@ actor LyricsService {
                     self.library.removeRecords(ids)
                 }
             }
+        }
+    }
+}
+
+@MainActor extension PlayerView {
+    func shuffleAllVideos() {
+        guard source == "Видеоклипы", !preparingVideoShuffle else { return }
+        preparingVideoShuffle=true; buttons["shuffle-videos"]?.isEnabled=false
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await library.playAllVideosShuffled()
+            preparingVideoShuffle=false; needsLayout=true; needsDisplay=true
         }
     }
 }

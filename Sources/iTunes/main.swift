@@ -324,6 +324,10 @@ enum WindowPlacement {
                 demo.lyrics = "[00:00.00]Первая строка следует за музыкой\n[00:05.00]Текущая строка выделяется синим\n[00:10.00]Остальной текст остаётся спокойным\n[00:15.00]Можно прокрутить и вернуться к песне"
                 library.tracks = [demo]; library.currentID = demo.id; self.view.refresh(); self.view.toggleLyrics()
             }
+            if args.contains("--videos-demo") {
+                library.tracks=(1...3).map { Track(id:"demo-video-\($0)",title:"Клип \($0)",artist:"Исполнитель",album:"—",genre:"—",duration:180,number:0,mediaKind:"video") }
+                view.source="Видеоклипы"; view.showsLyrics=true; view.setMode(3)
+            }
             if args.contains("--audit-dialog") { AquaMessage.show(for:window,title:"Проверка медиатеки",message:"Отсутствующие файлы не найдены.\n\nВсе композиции доступны в папках медиатеки.") }
             if args.contains("--android-sync-panel") { self.syncAndroid() }
             if args.contains("--hover") { view.setTrafficHovered(true) }
@@ -525,6 +529,9 @@ enum WindowPlacement {
             let file = root.appendingPathComponent("Test Tone.wav"); try Self.testAudio().write(to: file)
             let first = await library.importURLs([file]); precondition(first.0 == 1 && first.1 == 0)
             let second = await library.importURLs([file]); precondition(second.0 == 0)
+            await testVideoTransitions(root:root)
+            await testShuffleVideos(root:root)
+            await testVideoRefinements(root:root)
             try await testManagedMedia(root:root)
             try testMediaRemoval(track: library.tracks[0], root: root)
             testRefinements(track: library.tracks[0], root: root)
@@ -1096,4 +1103,99 @@ final class LyricsMockProtocol: URLProtocol, @unchecked Sendable {
     let dialog=AquaMessage(title:"Проверка медиатеки",message:"Тест",cancel:true,completion:{ _ in })
     precondition(dialog.window?.contentView is ClassicWindowChrome && dialog.okay.aqua)
     print("PASS: managed drag-import copies, duplicate suppression, actual MP3/AIFF/M4A tags and organized paths, untouched originals, reimported metadata, exact file rollback on DB failure, newest-first list and pulsing Aqua dialog")
+}
+
+@MainActor func testVideoRefinements(root: URL) async {
+    let suite="video-sort-"+UUID().uuidString; let defaults=UserDefaults(suiteName:suite)!; defer { defaults.removePersistentDomain(forName:suite) }
+    var clips: [Track]=[]
+    for (i,pair) in [("Zivert","Z"),("Madonna","M"),("Zivert","A")].enumerated() {
+        var clip=Track(id:String(i),title:pair.1,artist:pair.0,album:i == 0 ? "Unknown Album" : "Different folder",genre:"—",duration:4,number:0,mediaKind:"video")
+        clip.albumArtist=i == 0 ? "AAA wrong album artist" : "ZZZ wrong album artist"; clip.inferredAlbumArtist="Folder artist"; clips.append(clip)
+    }
+    let library=Library(storage:root.appendingPathComponent("video-sort.json")); library.tracks=clips
+    let ui=PlayerView(library:library,sortDefaults:defaults); ui.changeSort(primary:.year); let music=ui.sorting
+    ui.source="Видеоклипы"; ui.setMode(3)
+    precondition(ui.sorting.primary == .artist && ui.stage.albums.map(\.id) == ["1","2","0"])
+    ui.setMode(0); precondition(ui.rows.map(\.id) == ["1","2","0"])
+    ui.changeSort(ascending:false); precondition(ui.rows.map(\.id) == ["2","0","1"])
+    ui.source="Музыка"; precondition(ui.sorting == music)
+    ui.source="Видеоклипы"; precondition(!ui.sorting.ascending)
+    let restored=PlayerView(library:library,sortDefaults:defaults); restored.source="Видеоклипы"; restored.setMode(3)
+    precondition(restored.stage.albums.map(\.id) == ["2","0","1"])
+    for clip in clips { precondition(PlayerView.lcdSubtitle(clip) == clip.artist) }
+    var audio=clips[0]; audio.mediaKind="audio"; precondition(PlayerView.lcdSubtitle(audio).contains(audio.album))
+    ui.timer?.invalidate(); restored.timer?.invalidate()
+    if let index=CommandLine.arguments.firstIndex(of:"--video-fixtures"),CommandLine.arguments.indices.contains(index+1) {
+        let video=URL(fileURLWithPath:CommandLine.arguments[index+1]).appendingPathComponent("Preview.mp4")
+        let levels=await VideoMeterEnvelope.read(video) { _ in }
+        precondition(!levels.isEmpty)
+        // Tone during the first two seconds, actual silence during the last two.
+        precondition(VideoMeterEnvelope.strength(levels,at:0.5)>0.1 && VideoMeterEnvelope.strength(levels,at:3)<0.01)
+        library.tracks=[clips[0]]; library.tracks[0].path=video.path
+        library.play(library.tracks[0]); library.seek(to:0.5)
+        for _ in 0..<100 { if !library.videoMeterLevels.isEmpty { break }; try? await Task.sleep(nanoseconds:20_000_000) }
+        precondition(!library.videoMeterLevels.isEmpty)
+        library.videoPlayer?.pause(); precondition(library.meterStrength == 0)
+        library.stopPlayback(); precondition(library.videoMeterLevels.isEmpty)
+    }
+    print("PASS: video-only artist grouping across grid/list, reverse/persisted independent sort, no album in LCD, real video audio RMS/tone/silence, pause and meter cleanup")
+}
+
+@MainActor func testShuffleVideos(root:URL) async {
+    let empty=Library(storage:root.appendingPathComponent("shuffle-empty.json")); let none=await empty.playAllVideosShuffled(); precondition(!none && !empty.hasPlayback)
+    guard let i=CommandLine.arguments.firstIndex(of:"--video-fixtures"),CommandLine.arguments.indices.contains(i+1) else { return }
+    let path=URL(fileURLWithPath:CommandLine.arguments[i+1]).appendingPathComponent("Preview.mp4").path
+    let library=Library(storage:root.appendingPathComponent("shuffle-videos.json")); library.volume=0
+    let clips=(0..<2000).map { Track(id:"clip-\($0)",title:"Clip \($0)",artist:"Artist",album:"—",genre:"—",duration:4,number:0,path:path,mediaKind:"video") }
+    let audio=Track(id:"audio",title:"Music",artist:"Artist",album:"Album",genre:"—",duration:4,number:1,mediaKind:"audio")
+    library.tracks=clips+[audio]; library.playbackPlan.add([audio.id],next:true)
+    let started=await library.playAllVideosShuffled(); precondition(started && library.videoPlayer != nil && library.shuffle)
+    let order=[library.playbackPlan.current!.entry.trackID]+library.playbackPlan.continuation.map(\.trackID)
+    precondition(order.count == clips.count && Set(order) == Set(clips.map(\.id)))
+    precondition(library.playbackPlan.manual.isEmpty && library.playbackPlan.later.isEmpty && !order.contains(audio.id))
+    precondition(library.tracks.reduce(0) { $0+$1.plays } == 1 && library.playbackPlan.contextTitle == "Из видеотеки · перемешано")
+    library.stopPlayback(); library.currentID=nil
+    let ui=PlayerView(library:library); ui.source="Видеоклипы"; ui.showsLyrics=true; ui.query="no results"; ui.setMode(0); ui.layoutSubtreeIfNeeded()
+    let button=ui.buttons["shuffle-videos"]!
+    precondition(!button.isHidden && button.isEnabled && button.leadingGlyph != nil)
+    precondition(ui.buttons["lyrics"]!.isHidden && ui.lyricsPane.isHidden)
+    ui.mini=true; ui.needsLayout=true; ui.layoutSubtreeIfNeeded(); precondition(button.isHidden)
+    ui.mini=false; ui.source="Музыка"; ui.refresh(); ui.layoutSubtreeIfNeeded()
+    precondition(button.isHidden && !ui.buttons["lyrics"]!.isHidden)
+    ui.timer?.invalidate()
+    print("PASS: 2000-video shuffle starts one clip, excludes music, includes every clip once, replaces old manual queue, empty library, metallic icon button and video-only lyrics hiding")
+}
+
+@MainActor func testVideoTransitions(root:URL) async {
+    guard let i=CommandLine.arguments.firstIndex(of:"--video-fixtures"), CommandLine.arguments.indices.contains(i+1) else { return }
+    let path=URL(fileURLWithPath:CommandLine.arguments[i+1]).appendingPathComponent("Preview.mp4").path
+    let library=Library(storage:root.appendingPathComponent("video-transitions.json")); library.volume=0
+    let clips=(0..<3).map { Track(id:"transition-\($0)",title:"Clip \($0)",artist:"Artist",album:"—",genre:"—",duration:4,number:0,path:path,mediaKind:"video") }
+    library.tracks=clips
+    let ui=PlayerView(library:library); ui.source="Видеоклипы"
+    precondition(library.play(clips[0],within:clips))
+    let player=library.videoPlayer!
+    for direction in [0,1,1,-1,1,-1,-1] {
+        let previous=player.currentItem
+        if direction != 0 { library.step(direction) }
+        ui.refreshPlayback(); ui.layoutSubtreeIfNeeded()
+        precondition(library.videoPlayer === player && ui.videoView.player === player && ui.showingVideo && !ui.videoView.isHidden)
+        let item=player.currentItem!
+        if direction != 0 { precondition(item !== previous) }
+        let output=AVPlayerItemVideoOutput(pixelBufferAttributes:[kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA])
+        item.add(output)
+        var gotFrame=false
+        for _ in 0..<100 {
+            try? await Task.sleep(nanoseconds:20_000_000)
+            if output.copyPixelBuffer(forItemTime:player.currentTime(),itemTimeForDisplay:nil) != nil { gotFrame=true; break }
+        }
+        precondition(gotFrame && item.status == .readyToPlay && player.rate > 0)
+        item.remove(output)
+    }
+    ui.browseWhileVideoPlays(); precondition(!ui.showingVideo)
+    library.step(1); ui.layoutSubtreeIfNeeded()
+    precondition(ui.showingVideo && ui.videoView.player === player && !ui.videoView.isHidden)
+    library.stopPlayback(); ui.refreshPlayback(); ui.timer?.invalidate(); library.flushPendingSave()
+    precondition(ui.videoView.player == nil)
+    print("PASS: manual next/previous video transitions preserve the displayed player, replace items, decode real video frames with sound playback and reopen from browsing")
 }
