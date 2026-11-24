@@ -1,8 +1,28 @@
-# iTunes Classic
+<p align="center">
+  <img src="docs/images/app-icon.png" alt="Иконка iTunes Classic" width="128" height="128">
+</p>
+
+<h1 align="center">iTunes Classic</h1>
 
 Неофициальный локальный медиаплеер для macOS с интерфейсом в духе iTunes 9 и Mac OS X Snow Leopard. Нативное приложение на Swift и AppKit: металлические панели, элементы Aqua, сетка альбомов и Cover Flow.
 
 Проект не связан с Apple. iTunes и графические обозначения Apple принадлежат соответствующим правообладателям. Это ранняя экспериментальная сборка.
+
+## Интерфейс
+
+**Cover Flow** — обложки с отражениями и список песен выбранного альбома.
+
+![Cover Flow и раскрытый альбом в iTunes Classic](docs/images/cover-flow.png)
+
+**Сетка альбомов** — раскрывающаяся панель с обложкой, треками и управлением воспроизведением.
+
+![Сетка альбомов и панель композиций в iTunes Classic](docs/images/album-grid.png)
+
+**Мини-плеер** — компактное управление воспроизведением.
+
+<p align="center">
+  <img src="docs/images/mini-player.png" alt="Мини-плеер iTunes Classic" width="720">
+</p>
 
 ## Установка
 
