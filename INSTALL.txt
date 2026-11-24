@@ -1,4 +1,4 @@
-iTunes Classic 0.39 — экспериментальная сборка
+iTunes Classic 0.46 — экспериментальная сборка
 Apple Silicon · macOS 13+ (Android и запись тегов: macOS 27+)
 
 Перетащите iTunes.app на значок Applications («Программы»).

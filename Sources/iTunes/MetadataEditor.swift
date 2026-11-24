@@ -49,6 +49,52 @@ final class EditorButton: NSButton {
     }
 }
 
+/// A small non-activating Aqua list: typing stays in the original field editor.
+@MainActor final class MetadataSuggestionRow: NSButton {
+    var aquaSelected=false { didSet { needsDisplay=true } }
+    var choose: () -> Void
+    init(_ value:String, choose:@escaping () -> Void) {
+        self.choose=choose; super.init(frame:.zero); title=value; isBordered=false
+        target=self; action=#selector(accept); setAccessibilityLabel(value)
+    }
+    required init?(coder:NSCoder) { fatalError() }
+    @objc private func accept() { choose() }
+    override var isFlipped:Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas(); trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect:.zero,options:[.inVisibleRect,.mouseEnteredAndExited,.activeAlways],owner:self))
+    }
+    override func mouseEntered(with event:NSEvent) { aquaSelected=true }
+    override func mouseExited(with event:NSEvent) { aquaSelected=false }
+    override func draw(_ dirtyRect:NSRect) {
+        if aquaSelected || isHighlighted { gradient(bounds,0x6799DC,0x2863B6) }
+        let paragraph=NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
+        (title as NSString).draw(in:bounds.insetBy(dx:9,dy:4),withAttributes:[.font:NSFont(name:"LucidaGrande",size:11) ?? NSFont.systemFont(ofSize:11),.foregroundColor:aquaSelected || isHighlighted ? NSColor.white : color(0x222222),.paragraphStyle:paragraph])
+    }
+}
+struct MetadataSuggestions {
+    static func pool(_ tracks:[Track], field:MetadataField) -> [String] {
+        let values: [String]
+        switch field {
+        case .artist,.albumArtist: values=tracks.flatMap { [$0.artist,$0.albumArtist ?? ""] }
+        case .album: values=tracks.map(\.album)
+        default: return []
+        }
+        let ignored:Set<String>=["", "—", "unknown artist", "unknown album", "неизвестный исполнитель", "неизвестный альбом"]
+        var seen=Set<String>()
+        return values.map { $0.trimmingCharacters(in:.whitespacesAndNewlines) }.filter {
+            let key=$0.folding(options:[.caseInsensitive,.diacriticInsensitive],locale:Locale(identifier:"ru_RU"))
+            return !ignored.contains(key) && seen.insert(key).inserted
+        }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+    static func matching(_ pool:[String], query:String) -> [String] {
+        let query=query.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let matches=pool.filter { $0.range(of:query,options:[.caseInsensitive,.diacriticInsensitive]) != nil && $0.compare(query,options:[.caseInsensitive,.diacriticInsensitive]) != .orderedSame }
+        return Array((matches.filter { $0.range(of:query,options:[.anchored,.caseInsensitive,.diacriticInsensitive]) != nil } + matches.filter { $0.range(of:query,options:[.anchored,.caseInsensitive,.diacriticInsensitive]) == nil }).prefix(8))
+    }
+}
+
 @MainActor final class MetadataEditor: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
     private let library: Library
     private let records: [Track]
@@ -57,6 +103,11 @@ final class EditorButton: NSButton {
     private let body = FlippedView()
     private var tabs: [EditorButton] = []
     private var fields: [MetadataField: NSTextField] = [:]
+    private var suggestionPools: [MetadataField:[String]] = [:]
+    private var suggestionPanel:NSPanel?
+    private var suggestionRows:[MetadataSuggestionRow] = []
+    private var suggestionField:MetadataField?
+    private var suggestionIndex = -1
     private var checks: [MetadataField: NSButton] = [:]
     private var original: [MetadataField: String] = [:]
     private var mixed: Set<MetadataField> = []
@@ -81,6 +132,7 @@ final class EditorButton: NSButton {
         let panel = NSPanel(contentRect: surface.bounds, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init(window: panel)
         panel.delegate = self
+        for key in [MetadataField.artist,.albumArtist,.album] { suggestionPools[key]=MetadataSuggestions.pool(library.tracks,field:key) }
         panel.title = albumMode ? "Информация об альбоме" : records.count > 1 ? "Информация о композициях" : "Информация о композиции"
         panel.appearance = NSAppearance(named: .aqua); panel.isReleasedWhenClosed = false; panel.contentView = surface
         for key in MetadataField.allCases {
@@ -135,7 +187,7 @@ final class EditorButton: NSButton {
         if let lyricsView, changed.contains(.lyrics) { draft[.lyrics] = lyricsView.string }
     }
     private func selectTab(_ index: Int) {
-        captureDraft(); tab = index; fields = [:]; checks = [:]; lyricsView = nil
+        hideSuggestions(); captureDraft(); tab = index; fields = [:]; checks = [:]; lyricsView = nil
         body.subviews.forEach { $0.removeFromSuperview() }
         for (i, button) in tabs.enumerated() { button.selected = i == tab; button.needsDisplay = true }
         switch tabNames[index] {
@@ -197,7 +249,54 @@ final class EditorButton: NSButton {
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSTextField, let raw = field.identifier?.rawValue, let key = MetadataField(rawValue: raw) else { return }
         changed.insert(key); draft[key] = field.stringValue
+        updateSuggestions(for:key,input:field)
     }
+    private func hideSuggestions() {
+        if let panel=suggestionPanel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
+        suggestionPanel=nil; suggestionRows=[]; suggestionField=nil; suggestionIndex = -1
+    }
+    private func updateSuggestions(for key:MetadataField,input:NSTextField) {
+        hideSuggestions()
+        guard let window, window.isVisible, input.currentEditor() != nil, let pool=suggestionPools[key] else { return }
+        let values=MetadataSuggestions.matching(pool,query:input.stringValue)
+        guard !values.isEmpty else { return }
+        let frame=window.convertToScreen(input.convert(input.bounds,to:nil))
+        let height=CGFloat(values.count)*24+4, width=frame.width
+        let panel=NSPanel(contentRect:NSRect(x:frame.minX,y:frame.minY-height,width:width,height:height),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
+        panel.hasShadow=true; panel.isOpaque=true; panel.backgroundColor=color(0x888888); panel.hidesOnDeactivate=true
+        let content=FlippedView(frame:NSRect(x:0,y:0,width:width,height:height)); content.wantsLayer=true
+        content.layer?.backgroundColor=NSColor.white.cgColor; content.layer?.borderWidth=1; content.layer?.borderColor=color(0x888888).cgColor
+        panel.contentView=content; suggestionPanel=panel; suggestionField=key
+        for (i,value) in values.enumerated() {
+            let row=MetadataSuggestionRow(value) { [weak self] in self?.acceptSuggestion(value,field:key) }
+            row.frame=NSRect(x:1,y:2+CGFloat(i)*24,width:width-2,height:24); content.addSubview(row); suggestionRows.append(row)
+        }
+        window.addChildWindow(panel,ordered:.above); panel.orderFront(nil)
+    }
+    private func acceptSuggestion(_ value:String,field key:MetadataField) {
+        guard let input=fields[key] else { hideSuggestions(); return }
+        input.stringValue=value
+        if let editor=input.currentEditor() as? NSTextView { editor.string=value; editor.setSelectedRange(NSRange(location:(value as NSString).length,length:0)) }
+        changed.insert(key); draft[key]=value; hideSuggestions()
+    }
+    func controlTextDidEndEditing(_ notification:Notification) { hideSuggestions() }
+    func control(_ control:NSControl,textView:NSTextView,doCommandBy commandSelector:Selector) -> Bool {
+        guard suggestionPanel != nil else { return false }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.moveUp(_:)) {
+            let delta=commandSelector == #selector(NSResponder.moveDown(_:)) ? 1 : -1
+            suggestionIndex=max(0,min(suggestionRows.count-1,suggestionIndex+delta))
+            for (i,row) in suggestionRows.enumerated() { row.aquaSelected=i == suggestionIndex }
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { hideSuggestions(); return true }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)), suggestionRows.indices.contains(suggestionIndex), let key=suggestionField {
+            acceptSuggestion(suggestionRows[suggestionIndex].title,field:key); return true
+        }
+        if commandSelector == #selector(NSResponder.insertTab(_:)) || commandSelector == #selector(NSResponder.insertBacktab(_:)) || commandSelector == #selector(NSResponder.insertNewline(_:)) { hideSuggestions() }
+        return false
+    }
+    func windowDidResignKey(_ notification:Notification) { hideSuggestions() }
+
     func textDidChange(_ notification: Notification) { changed.insert(.lyrics); draft[.lyrics] = lyricsView?.string ?? "" }
     @objc private func checkChanged(_ sender: NSButton) {
         guard let key = MetadataField(rawValue: sender.identifier?.rawValue ?? "") else { return }
@@ -233,6 +332,7 @@ final class EditorButton: NSButton {
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { closeSheet(); return false }
     private func closeSheet() {
+        hideSuggestions()
         guard !saving else { return }
         guard let window else { return }
         if let parent = window.sheetParent { parent.endSheet(window); parent.makeKeyAndOrderFront(nil) }
@@ -311,6 +411,30 @@ final class EditorButton: NSButton {
         let group = MetadataEditor(library: library, records: [track, other], albumMode: true)
         for i in group.tabNames.indices { group.selectTab(i) }
         group.commit(); while group.saving { try? await Task.sleep(nanoseconds:10_000_000) }; precondition(library.tracks.map(\.title) == [track.title,other.title])
+        var first=track; first.artist="Taylor Swift"; first.album="Midnights"; first.albumArtist="Taylor Swift"
+        var second=track; second.id="suggestion-2"; second.artist="taylor swift"; second.album="Folklore"; second.albumArtist="Zivert"
+        var third=track; third.id="suggestion-3"; third.artist="Зиверт"; third.album="В МИРЕ ВЕСЁЛЫХ"; third.albumArtist=nil
+        library.tracks=[first,second,third]
+        let pool=MetadataSuggestions.pool(library.tracks,field:.artist)
+        precondition(pool.count == 3 && MetadataSuggestions.matching(pool,query:"tay") == ["Taylor Swift"])
+        precondition(MetadataSuggestions.matching(MetadataSuggestions.pool(library.tracks,field:.album),query:"весел") == ["В МИРЕ ВЕСЁЛЫХ"])
+        precondition(MetadataSuggestions.matching(pool,query:"").isEmpty && MetadataSuggestions.matching(pool,query:"Taylor Swift").isEmpty)
+        let completion=MetadataEditor(library:library,records:[third],albumMode:false)
+        completion.showWindow(nil); completion.window!.makeKeyAndOrderFront(nil)
+        let artist=completion.fields[.artist]!; completion.window!.makeFirstResponder(artist)
+        artist.stringValue="tay"; (artist.currentEditor() as? NSTextView)?.string="tay"
+        completion.controlTextDidChange(Notification(name:NSControl.textDidChangeNotification,object:artist))
+        precondition(completion.suggestionRows.map(\.title) == ["Taylor Swift"] && completion.suggestionPanel?.isVisible == true)
+        if let view=completion.suggestionPanel?.contentView, let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds) {
+            view.cacheDisplay(in:view.bounds,to:bitmap); try? bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:"/private/tmp/itunes044-suggestions.png"))
+        }
+        let fieldEditor=artist.currentEditor() as! NSTextView
+        precondition(completion.control(artist,textView:fieldEditor,doCommandBy:#selector(NSResponder.moveDown(_:))))
+        precondition(completion.control(artist,textView:fieldEditor,doCommandBy:#selector(NSResponder.insertNewline(_:))))
+        precondition(artist.stringValue == "Taylor Swift" && fieldEditor.string == "Taylor Swift" && completion.draft[.artist] == "Taylor Swift" && completion.changed.contains(.artist) && completion.suggestionPanel == nil)
+        precondition(library.tracks[2].artist == "Зиверт")
+        completion.closeSheet()
+        print("PASS: Aqua artist/album suggestions, Unicode matching, deduplication, popup, keyboard acceptance and unsaved drafts")
         print("PASS: Aqua metadata tabs, drafts across tabs, volume/artwork sliders, explicit-only group edits and commit")
     }
 }

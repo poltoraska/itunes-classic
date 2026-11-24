@@ -162,7 +162,7 @@ extension Track {
     }
     func apply(_ patch: MetadataPatch, to ids: Set<String>) throws {
         let candidate=try metadataCandidate(patch,to:ids)
-        let transaction=try ManagedEdit(old:tracks,candidate:candidate,ids:ids,patch:patch,root:mediaRoot)
+        let transaction=try ManagedEdit(old:tracks,candidate:candidate,ids:ids,patch:patch,root:mediaRoot,legacyRoots:legacyMediaRoots)
         try commitManaged(transaction)
     }
     func applyPlayerSettings(smooth: Bool = false) {
@@ -264,10 +264,13 @@ struct ImportedMetadata {
 
 
 struct ManagedMedia {
+    static func defaultRoot(musicDirectory: URL) -> URL {
+        musicDirectory.appendingPathComponent("Music/Media.localized",isDirectory:true)
+    }
     static func safe(_ name: String) -> String { SyncPlanner.component(name) }
     static func destination(_ track: Track, root: URL, excluding: Set<String> = []) -> URL {
         let ext=URL(fileURLWithPath:track.path ?? "audio.mp3").pathExtension.lowercased()
-        let folder=root.appendingPathComponent(track.isVideo ? "Видео" : "Музыка").appendingPathComponent(safe(track.albumDisplayArtist)).appendingPathComponent(safe(track.album))
+        let folder=root.appendingPathComponent(track.isVideo ? "Movies" : "Music").appendingPathComponent(safe(track.albumDisplayArtist)).appendingPathComponent(safe(track.album))
         let prefix=track.number > 0 ? String(format:"%02d-%02d ",track.discNumber ?? 1,track.number) : ""
         let base=folder.appendingPathComponent(prefix+safe(track.title)).appendingPathExtension(ext)
         var result=base; var i=1
@@ -297,7 +300,7 @@ final class ManagedEdit: @unchecked Sendable {
     private let work: URL
     private var changes: [FileChange] = []
     private var published: [FileChange] = []
-    init(old: [Track], candidate: [Track], ids: Set<String>, patch: MetadataPatch, root: URL) throws {
+    init(old: [Track], candidate: [Track], ids: Set<String>, patch: MetadataPatch, root: URL, legacyRoots: [URL] = []) throws {
         tracks=candidate; work=root.appendingPathComponent(".edit-"+UUID().uuidString)
         let tagFields: Set<MetadataField> = [.title,.artist,.album,.albumArtist,.genre,.year,.composer,.grouping,.comments,.lyrics,.bpm,.sortTitle,.sortArtist,.sortAlbum,.sortAlbumArtist,.sortComposer,.isCompilation,.number,.trackTotal,.discNumber,.discTotal]
         var writeTags = !tagFields.isDisjoint(with:patch.fields.keys)
@@ -308,7 +311,7 @@ final class ManagedEdit: @unchecked Sendable {
         do {
             for track in selected {
                 guard let prior=old.first(where: { $0.id == track.id }), let path=prior.path,
-                    URL(fileURLWithPath:path).resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path+"/") else { throw MetadataError(message:"Файл находится вне управляемой медиатеки.") }
+                    ([root]+legacyRoots).contains(where: { URL(fileURLWithPath:path).resolvingSymlinksInPath().path.hasPrefix($0.resolvingSymlinksInPath().path+"/") }) else { throw MetadataError(message:"Файл находится вне управляемой медиатеки.") }
                 let original=URL(fileURLWithPath:path)
                 let staged=work.appendingPathComponent(track.id).appendingPathExtension(original.pathExtension)
                 try FileManager.default.copyItem(at:original,to:staged)
@@ -356,9 +359,9 @@ final class ManagedEdit: @unchecked Sendable {
 }
 @MainActor extension Library {
     func applyAsync(_ patch: MetadataPatch, to ids: Set<String>) async throws {
-        let snapshot=tracks, revision=contentRevision, root=mediaRoot
+        let snapshot=tracks, revision=contentRevision, root=mediaRoot, legacyRoots=legacyMediaRoots
         let candidate=try metadataCandidate(patch,to:ids)
-        let transaction=try await Task.detached { try ManagedEdit(old:snapshot,candidate:candidate,ids:ids,patch:patch,root:root) }.value
+        let transaction=try await Task.detached { try ManagedEdit(old:snapshot,candidate:candidate,ids:ids,patch:patch,root:root,legacyRoots:legacyRoots) }.value
         guard revision == contentRevision else { transaction.rollback(); throw MetadataError(message:"Медиатека изменилась. Откройте редактор заново и повторите сохранение.") }
         try commitManaged(transaction)
     }

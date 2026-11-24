@@ -1111,7 +1111,6 @@ final class FlowScrubber: NSControl {
         repeatButton.frame = NSRect(x: 70, y: h - 23, width: 30, height: 22)
         buttons["artwork"]?.frame = NSRect(x: 100, y: h - 23, width: 30, height: 22)
         buttons["return-video"]?.frame = NSRect(x:w-138,y:h-23,width:130,height:22)
-        buttons["import-library"]?.frame = NSRect(x: 10, y: 163, width: sidebarWidth - 20, height: 21)
         buttons["artwork-header"]?.frame = NSRect(x: 0, y: showSidebarArtwork ? sidebarArtworkRect.minY - 20 : h - 44, width: sidebarWidth - 0.5, height: 20)
         buttons["artwork-header"]?.symbol = library.current == nil ? "Выбранный объект" : "Сейчас играет"
         buttons["artwork-header"]?.selected = showSidebarArtwork
@@ -1164,7 +1163,7 @@ final class FlowScrubber: NSControl {
         buttons["close-video"]?.isHidden = videoView.isHidden
         if !videoView.isHidden {
             albumScroll.isHidden = true; tableScroll.isHidden = true; flowDetailScroll.isHidden = true
-            for key in ["info", "lyrics", "shuffle-videos", "back", "import", "import-library", "artwork-header"] { buttons[key]?.isHidden = true }
+            for key in ["info", "lyrics", "shuffle-videos", "back", "import", "artwork-header"] { buttons[key]?.isHidden = true }
             groupingButtons.forEach { $0.isHidden = true }; coverSize.isHidden = true
         }
         if fullScreenVideo { subviews.forEach { $0.isHidden = $0 !== videoView && $0 !== videoControls }; videoControls.isHidden = false }
@@ -1480,13 +1479,6 @@ final class FlowScrubber: NSControl {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else { return false }
         importMusic(urls); return true
-    }
-    func importLibrary() {
-        guard !importing, let window else { return }
-        let panel = NSOpenPanel(); panel.title = "Выберите папку медиатеки"; panel.prompt = "Добавить медиатеку"
-        panel.message = "Музыка и клипы во всех вложенных папках будут добавлены автоматически. Исходные файлы останутся на месте."
-        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-        panel.beginSheetModal(for: window) { [weak self] result in if result == .OK { self?.importMusic(panel.urls) } }
     }
     func importFiles() {
         guard !importing, let window else { return }

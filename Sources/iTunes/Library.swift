@@ -189,6 +189,7 @@ private enum LibraryStorage {
     var current: Track? { tracks.first { $0.id == currentID } }
     var playing: Bool { videoPlayer.map { $0.rate != 0 } ?? player?.isPlaying ?? false }
     let mediaRoot: URL
+    let legacyMediaRoots: [URL]
     let managedImports: Bool
     let storage: URL
     private(set) var albumMetadataVersion: Int?
@@ -199,7 +200,9 @@ private enum LibraryStorage {
     init(storage: URL? = nil, defaults: UserDefaults? = nil, managedImports: Bool? = nil) {
         // Temporary/private test libraries never write the user's playback preferences.
         self.managedImports=managedImports ?? (storage == nil)
-        mediaRoot=storage.map { $0.deletingLastPathComponent().appendingPathComponent("Media") } ?? FileManager.default.urls(for:.musicDirectory,in:.userDomainMask)[0].appendingPathComponent("iTunes Classic Media")
+        let musicDirectory=FileManager.default.urls(for:.musicDirectory,in:.userDomainMask)[0]
+        mediaRoot=storage.map { $0.deletingLastPathComponent().appendingPathComponent("Media") } ?? ManagedMedia.defaultRoot(musicDirectory:musicDirectory)
+        legacyMediaRoots=storage == nil ? [musicDirectory.appendingPathComponent("iTunes Classic Media")] : []
         playbackDefaults = defaults ?? (storage == nil ? .standard : nil)
         if let saved = playbackDefaults?.object(forKey: Self.volumePreferenceKey) as? NSNumber, saved.doubleValue.isFinite {
             storedVolume = Float(min(1, max(0, saved.doubleValue)))

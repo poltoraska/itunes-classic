@@ -392,7 +392,7 @@ enum WindowPlacement {
         if let previewStorage { try? FileManager.default.removeItem(at: previewStorage.deletingLastPathComponent()) }
     }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !CommandLine.arguments.contains("--self-test") }
     func createMenu() {
         let menu = NSMenu(); let app = NSMenuItem(); let appMenu = NSMenu(); app.submenu = appMenu; menu.addItem(app)
         appMenu.addItem(withTitle: "Об iTunes", action: #selector(about), keyEquivalent: "").target = self
@@ -400,7 +400,6 @@ enum WindowPlacement {
         appMenu.addItem(.separator()); appMenu.addItem(withTitle: "Завершить iTunes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let file = NSMenuItem(); file.title = "Файл"; let fileMenu = NSMenu(title: "Файл"); file.submenu = fileMenu; menu.addItem(file)
         fileMenu.addItem(withTitle: "Добавить музыку и видеоклипы…", action: #selector(importFiles), keyEquivalent: "o").target = self
-        fileMenu.addItem(withTitle: "Добавить медиатеку…", action: #selector(importLibrary), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle:"Проверить файлы медиатеки…",action:#selector(auditMediaFiles),keyEquivalent:"").target=self
         fileMenu.addItem(withTitle: "Синхронизировать с Android…", action: #selector(syncAndroid), keyEquivalent: "").target = self
         fileMenu.addItem(withTitle: "Информация…", action: #selector(editInfo), keyEquivalent: "i").target = self
@@ -505,7 +504,6 @@ enum WindowPlacement {
     }
     @objc func editInfo() { view.editSelection() }
     @objc func auditMediaFiles() { view.auditMediaFiles() }
-    @objc func importLibrary() { view.importLibrary() }
     @objc func importFiles() { view.importFiles() }
     @objc func newPlaylist() { view.createPlaylist() }
     @objc func toggleLyrics() { view.toggleLyrics() }
@@ -1067,6 +1065,27 @@ final class LyricsMockProtocol: URLProtocol, @unchecked Sendable {
     let fixtures=URL(fileURLWithPath:CommandLine.arguments[index+1]).standardizedFileURL
     let files=try FileManager.default.contentsOfDirectory(at:fixtures,includingPropertiesForKeys:nil).filter { ["mp3","aiff","m4a"].contains($0.pathExtension) }
     let originals=try files.map { try Data(contentsOf:$0) }
+    let musicDirectory=root.appendingPathComponent("User/Music")
+    let sharedRoot=ManagedMedia.defaultRoot(musicDirectory:musicDirectory)
+    precondition(sharedRoot.path == musicDirectory.appendingPathComponent("Music/Media.localized").path)
+    let legacyRoot=root.appendingPathComponent("legacy-media")
+    try FileManager.default.createDirectory(at:legacyRoot,withIntermediateDirectories:true)
+    let source=legacyRoot.appendingPathComponent("old.mp3")
+    try FileManager.default.copyItem(at:files.first { $0.pathExtension == "mp3" }!,to:source)
+    var legacy=Track(id:"legacy-copy",title:"Song",artist:"Artist",album:"Album",genre:"Pop",duration:4,number:1,path:source.path)
+    legacy.managedCopy=true
+    let dest=ManagedMedia.destination(legacy,root:sharedRoot)
+    precondition(dest.deletingLastPathComponent().path == sharedRoot.appendingPathComponent("Music/Artist/Album").path && !dest.path.contains("Автодобав"))
+    var video=legacy; video.mediaKind="video"
+    precondition(!ManagedMedia.destination(video,root:sharedRoot).path.hasPrefix(sharedRoot.appendingPathComponent("Music").path+"/"))
+    var renamed=legacy; renamed.album="Renamed"
+    var renamePatch=MetadataPatch(); renamePatch.fields=[.album:"Renamed"]
+    do { _=try ManagedEdit(old:[legacy],candidate:[renamed],ids:[legacy.id],patch:renamePatch,root:sharedRoot); preconditionFailure("Untrusted legacy root accepted") } catch {}
+    let edit=try ManagedEdit(old:[legacy],candidate:[renamed],ids:[legacy.id],patch:renamePatch,root:sharedRoot,legacyRoots:[legacyRoot])
+    try edit.publish(); let migratedPath=edit.tracks[0].path!
+    precondition(migratedPath.hasPrefix(sharedRoot.appendingPathComponent("Music/Artist/Renamed").path+"/") && FileManager.default.fileExists(atPath:source.path))
+    edit.rollback(); precondition(FileManager.default.fileExists(atPath:source.path) && !FileManager.default.fileExists(atPath:migratedPath))
+    print("PASS: Apple Music shared Music/Media.localized/Music destination, no autoinbox/video mixing, trusted old managed copies and file rollback")
     let base=root.appendingPathComponent("managed-test"); try FileManager.default.createDirectory(at:base,withIntermediateDirectories:true)
     let library=Library(storage:base.appendingPathComponent("library.json"),managedImports:true)
     let imported=await library.importURLs(files); precondition(imported.0 == 3 && imported.1 == 0)
@@ -1185,11 +1204,13 @@ final class LyricsMockProtocol: URLProtocol, @unchecked Sendable {
         let output=AVPlayerItemVideoOutput(pixelBufferAttributes:[kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA])
         item.add(output)
         var gotFrame=false
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             try? await Task.sleep(nanoseconds:20_000_000)
             if output.copyPixelBuffer(forItemTime:player.currentTime(),itemTimeForDisplay:nil) != nil { gotFrame=true; break }
         }
-        precondition(gotFrame && item.status == .readyToPlay && player.rate > 0)
+        guard gotFrame && item.status == .readyToPlay && player.rate > 0 else {
+            fatalError("Video transition test: direction=\(direction), frame=\(gotFrame), status=\(item.status.rawValue), rate=\(player.rate), error=\(String(describing:item.error))")
+        }
         item.remove(output)
     }
     ui.browseWhileVideoPlays(); precondition(!ui.showingVideo)
